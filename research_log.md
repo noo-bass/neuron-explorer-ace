@@ -340,3 +340,5 @@ Batching buys ~40× over ACE's sequential path. But **constrained decoding is do
 Waveform difference is crude (a small timing shift scores high), so it orders the windows but says nothing about what changed. Listening comes next, then a calibrated dose ladder per layer and descriptive audio measures (#4).
 
 **Cost, revised.** At ~13 runs/s, one full planner layer ≈ 80 min on an L40S ≈ $3. Lyra's pattern (2 full layers + a 384-neuron survey of all 28) ≈ 6 GPU-hours ≈ $12–15 before constrained-decoding overhead. Renderer pilot (~1,500 clips) ≈ 35 min ≈ $1.
+
+**First listening notes (Noo, renderer L12 smoke clips).** Renderer L12 N5455 removes the piano from the lo-fi plan when pushed in the early steps or in all steps, and not in the late steps alone. Dose 1.0 is destructive across the board. One listener, one plan, one push direction so far: it could be a specific "piano" neuron, or any push of that size in early steps could thin out the arrangement. Next check: N5455 on several different plans (with and without piano), beside random directions of the same size and window.
