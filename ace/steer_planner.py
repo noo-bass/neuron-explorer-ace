@@ -2,10 +2,9 @@
 size at one layer, and compare the planner's phase-1 notes (bpm, key, caption, ...) with the unsteered notes.
 
 The push goes into ACE's own PyTorch planner (LLMHandler backend "pt"), so prompt format, constrained decoding and
-CFG are ACE's as shipped. It is added at the layer's MLP output, which equals "add to neuron n's activation" because
+CFG are ACE's as shipped (ACE turns CFG off for phase 1 itself, so these runs are single-pass). It is added at the layer's MLP output, which equals "add to neuron n's activation" because
 Qwen3 has no FFN layer scale: dose x median residual norm leaving the layer (tokens 1:), along the unit direction of
-W_down[:, n] or of a random vector. The CFG batch is [cond..., uncond...]; the hook pushes every row, i.e. the
-steered model is used for both halves.
+W_down[:, n] or of a random vector. In phase 2 the CFG batch is [cond..., uncond...] and the hook pushes every row.
 
 Run from this repo with ACE's environment:
     uv run --project ../ACE-Step-1.5 python ace/steer_planner.py --layer 14
@@ -34,7 +33,7 @@ ap.add_argument("--neurons", type=int, default=4, help="random neurons sampled f
 ap.add_argument("--controls", type=int, default=4, help="random directions of the same size")
 ap.add_argument("--doses", type=float, nargs="+", default=[-0.4, -0.2, -0.1, -0.05, 0.05, 0.1, 0.2, 0.4])
 ap.add_argument("--max-new-tokens", type=int, default=400, help="notes are ~150 tokens; ACE's own cap is 4096")
-ap.add_argument("--cfg", type=float, default=2.0, help="ACE's GenerationParams default lm_cfg_scale")
+ap.add_argument("--cfg", type=float, default=2.0, help="phase 2 only; ACE forces 1.0 for phase 1")
 ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--out", default=os.path.join(RUNS, "ace_smoke.jsonl"))
 args = ap.parse_args()
@@ -128,4 +127,4 @@ for dose in args.doses:
         r = [x for x in rows if x[0] == kind and x[1] == dose]
         cell.append(f"{sum(x[2] for x in r) / len(r):.2f}  {sum(x[3] for x in r)}/{len(r)}")
     print(f"{dose:+.2f}  | {cell[0]:>16} | {cell[1]:>15}")
-print(f"\n{seconds / runs:.1f} s per steered run (one caption + its CFG twin, MPS); {args.out}", flush=True)
+print(f"\n{seconds / runs:.1f} s per steered run (one caption, single pass, MPS); {args.out}", flush=True)
