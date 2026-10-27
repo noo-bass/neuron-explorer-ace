@@ -35,12 +35,13 @@ ap.add_argument("--doses", type=float, nargs="+", default=[-0.4, -0.2, -0.1, -0.
 ap.add_argument("--max-new-tokens", type=int, default=400, help="notes are ~150 tokens; ACE's own cap is 4096")
 ap.add_argument("--cfg", type=float, default=2.0, help="phase 2 only; ACE forces 1.0 for phase 1")
 ap.add_argument("--seed", type=int, default=0)
+ap.add_argument("--device", default="mps")
 ap.add_argument("--out", default=os.path.join(RUNS, "ace_smoke.jsonl"))
 args = ap.parse_args()
 
 lm = LLMHandler()
 status, ok = lm.initialize(checkpoint_dir=os.path.join(ACE, "checkpoints"), lm_model_path="acestep-5Hz-lm-1.7B",
-                           backend="pt", device="mps")
+                           backend="pt", device=args.device)
 if not ok:
     raise SystemExit(status)
 model, tok = lm.llm, lm.llm_tokenizer
@@ -127,4 +128,4 @@ for dose in args.doses:
         r = [x for x in rows if x[0] == kind and x[1] == dose]
         cell.append(f"{sum(x[2] for x in r) / len(r):.2f}  {sum(x[3] for x in r)}/{len(r)}")
     print(f"{dose:+.2f}  | {cell[0]:>16} | {cell[1]:>15}")
-print(f"\n{seconds / runs:.1f} s per steered run (one caption, single pass, MPS); {args.out}", flush=True)
+print(f"\n{seconds / runs:.1f} s per steered run (one caption, single pass, {args.device}); {args.out}", flush=True)

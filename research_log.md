@@ -313,3 +313,30 @@ Per-layer Spearman ρ between the two scores is 0.84–0.95. The hypothesis is d
 - The same ladder at other depths, and ±0.3 at L14.
 - A breakage measure that catches word salad.
 - Whether to measure the ruler without the massive channels instead of shrinking doses. The two are equivalent per layer if the massive channels' share is constant across tokens, but that hasn't been checked.
+
+## 2026-10-27 afternoon — Modal smoke tests: planner speed, constrained decoding, first renderer pushes
+
+**Setup.** `ace/modal_smoke.py`: ACE installed from its own lock file at ca1e85f on `python:3.12-slim-bookworm`, checkpoints in the `ace-checkpoints` volume, L40S. The workspace is on Modal's legacy image builder (Debian 11 base with a stale apt index, and a pinned aiohttp 3.8.3 that won't build on 3.12), so runs set `MODAL_IMAGE_BUILDER_VERSION=2025.06`; the workspace setting is unchanged.
+
+**Planner, ACE's own runs on a GPU.** 2.4 s per notes run (vs 6.9 s on the M5 Max), bfloat16. The Mac's float32 results reproduce closely: same baselines, and many steered sheets identical word for word (e.g. L14 N2732 −0.1 on the lo-fi caption → bpm 81, "A gentle, melancholic piano melody with a soft, felt-like tone…" on both). ACE's `pt` path runs one sequence at a time, so a full layer (~64k runs) would still be ~43 GPU-hours.
+
+**Batched, unconstrained.** Plain HF `generate`, one push per batch row, greedy, stop at `</think>`, pushes ±0.15 on random neurons:
+
+| batch | runs/s | tokens/s | notes well-formed |
+|---|---|---|---|
+| 1 | 0.3 | 54 | 1/1 |
+| 16 | 4.2 | 610 | 12/16 |
+| 64 | 8.8 | 1,560 | 42/64 |
+| 128 | 11.4 | 2,169 | 66/128 |
+| 256 | 12.9 | 2,234 | 147/256 |
+
+Batching buys ~40× over ACE's sequential path. But **constrained decoding is doing real work**. Without it the planner skips fields: of 22 malformed sheets at batch 64, 17 had no caption, 13 no bpm, and 9 ran to the 400-token cap. Even unpushed, the unconstrained sheet differs from ACE's (bpm 120 vs 100, a different caption). So an unconstrained sweep would study a different regime from the one ACE users get, and field-by-field scoring would have holes. Decision for #2: run ACE's own `MetadataConstrainedLogitsProcessor`, one instance per batch row, inside a batched greedy loop.
+
+**Renderer, first pushes** (`runs/renderer_smoke_L12/`, listening page `ace/reports/renderer_smoke_L12.html`). One 10 s plan (lo-fi, 88 bpm, D minor), rendered by the turbo DiT with fixed codes and seed: 1.4 s per clip, and the untouched render repeats bit for bit, so any difference comes from the push. 8 decoder calls per render (one per denoising step; turbo has no CFG). L12 median residual norm 4,255, median MLP-output norm 424; the push is added at the MLP output, before the layer's per-step gate, so it equals adding to the neuron's activation. Waveform difference (RMS of difference ÷ RMS of untouched), 2 random neurons + 2 random directions:
+- dose 0.3: early steps (0–3) 0.49–0.69, late steps (4–7) 0.33–0.35, all steps 0.59–0.73.
+- dose 1.0: 0.60–1.13 everywhere, i.e. about as different as an unrelated clip.
+- Neurons ≈ random directions on this measure.
+
+Waveform difference is crude (a small timing shift scores high), so it orders the windows but says nothing about what changed. Listening comes next, then a calibrated dose ladder per layer and descriptive audio measures (#4).
+
+**Cost, revised.** At ~13 runs/s, one full planner layer ≈ 80 min on an L40S ≈ $3. Lyra's pattern (2 full layers + a 384-neuron survey of all 28) ≈ 6 GPU-hours ≈ $12–15 before constrained-decoding overhead. Renderer pilot (~1,500 clips) ≈ 35 min ≈ $1.
