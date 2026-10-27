@@ -53,7 +53,11 @@ def _(Path, json, mo, pl):
          "stands out": u["kind"] == "neuron" and abs(u["z"]) > r["max_random_z"]}
         for r in ranking.values() for u in r["units"]
     ])
-    return PLAIN, PLANS, RUN, scores
+    # Qwen3.5-Omni's answer to "what changed between the untouched and the pushed clip?" (ace/describe_sweep.py)
+    _path = RUN / "descriptions.jsonl"
+    described = {(d["plan"], d["kind"], d["unit"], d["dose"]): d["description"]
+                 for d in map(json.loads, _path.read_text().splitlines())} if _path.exists() else {}
+    return PLAIN, PLANS, RUN, described, scores
 
 
 @app.cell
@@ -100,7 +104,7 @@ def _(mo, pl, scores):
 
 
 @app.cell
-def _(PLANS, RUN, chart, dose, measure, mo, pl, scores, table):
+def _(PLANS, RUN, chart, described, dose, measure, mo, pl, scores, table):
     picked_chart = chart.value
     if len(picked_chart) and "unit" in picked_chart.columns:
         kind, unit = picked_chart["kind"][0], int(picked_chart["unit"][0])
@@ -113,9 +117,13 @@ def _(PLANS, RUN, chart, dose, measure, mo, pl, scores, table):
     def clip(path):
         return mo.audio((RUN / "clips" / path).read_bytes())
 
+    def pushed(p, d):
+        text = described.get((p, kind, unit, d))
+        heard = mo.accordion({"What Qwen heard change": mo.md(text)}) if text else mo.md("*not described*")
+        return mo.vstack([mo.md(f"push {d:+g}"), clip(f"{p}/{kind}{unit}_{d:+g}.ogg"), heard])
+
     songs = [mo.hstack([mo.md(f"**{p.replace('_', ' ')}**"), mo.vstack([mo.md("untouched"), clip(f"{p}/untouched.ogg")]),
-                        mo.vstack([mo.md("push +0.3"), clip(f"{p}/{kind}{unit}_+0.3.ogg")]),
-                        mo.vstack([mo.md("push -0.3"), clip(f"{p}/{kind}{unit}_-0.3.ogg")])], widths=[1, 2, 2, 2], align="center")
+                        pushed(p, 0.3), pushed(p, -0.3)], widths=[1, 2, 2, 2], align="start")
              for p in PLANS]
     title = f"Neuron {unit}" if kind == "neuron" else f"Random push {unit}"
     summary = f"{measure.value}, {'+' if dose.value > 0 else ''}{dose.value}: {row['z'][0]:+.1f} random-spreads from the random average, {row['songs agreeing'][0]} of 4 songs agree" if row.height else ""
