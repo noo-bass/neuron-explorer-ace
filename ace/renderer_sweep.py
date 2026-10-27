@@ -147,3 +147,85 @@ def check():
         log(f"{k:45} {v}")
     json.dump({"plan": {**p, "params": {k: v for k, v in p["params"].items() if k != "audio_codes"}}, "report": report}, open(f"{out}/check.json", "w"), indent=1)
     runs.commit()
+
+
+OUT = f"/runs/renderer_sweep_L{LAYER}"
+DOSES = (0.3, -0.3)
+
+
+def pilot_units(n=256):
+    """N5455 and N2732 (heard before), 254 more neurons drawn at random, and n random directions."""
+    import random
+
+    rest = [i for i in range(6144) if i not in (5455, 2732)]
+    neurons = [5455, 2732] + sorted(random.Random(0).sample(rest, n - 2))
+    return [("neuron", i) for i in neurons] + [("random", i) for i in range(n)]
+
+
+@app.function(volumes=VOLS, gpu=GPU, timeout=3600)
+def make_plans():
+    """Plan each song once and keep the plan, so every push is rendered from the same plan.
+    The planner samples, so planning again would give a different song."""
+    os.makedirs(OUT, exist_ok=True)
+    R = Renderer()
+    plans = {}
+    for name, caption in PLANS.items():
+        plans[name] = R.plan(caption)
+        log(f"[{name}] bpm {plans[name]['params']['bpm']} key {plans[name]['params']['keyscale']}, "
+            f"residual norm {plans[name]['resid_median']:.0f}")
+    json.dump(plans, open(f"{OUT}/plans.json", "w"), indent=1)
+    runs.commit()
+
+
+@app.function(volumes=VOLS, gpu=GPU, timeout=3 * 3600)
+def sweep_part(plan_name: str, units: list):
+    """Render one plan with every unit pushed at every dose, 8 rows per batch. Clips go to clips/<plan>/ as Ogg,
+    one index line per clip with how far it moved from the untouched render."""
+    import numpy as np
+    import soundfile as sf
+
+    plan = json.load(open(f"{OUT}/plans.json"))[plan_name]
+    clip_dir = f"{OUT}/clips/{plan_name}"
+    os.makedirs(clip_dir, exist_ok=True)
+    R = Renderer()
+    torch = R.torch
+    hidden = R.W.shape[0]
+    clips, sr = R.render(plan, torch.zeros(8, hidden, device=R.W.device))
+    base = clips[0]
+    sf.write(f"{clip_dir}/untouched.ogg", np.clip(base, -1, 1), sr, format="OGG", subtype="VORBIS")
+    rms = float(np.sqrt(np.mean(base ** 2)))
+
+    jobs = [(kind, i, dose) for kind, i in units for dose in DOSES]
+    index = open(f"{OUT}/index_{plan_name}_{units[0][0]}{units[0][1]}.jsonl", "w")
+    t0 = time.time()
+    for b in range(0, len(jobs), 8):
+        chunk = jobs[b:b + 8]
+        rows = torch.zeros(8, hidden, device=R.W.device)
+        for k, (kind, i, dose) in enumerate(chunk):
+            rows[k] = dose * plan["resid_median"] * R.direction(kind, i)
+        out, _ = R.render(plan, rows)
+        for (kind, i, dose), x in zip(chunk, out):
+            name = f"{kind}{i}_{dose:+g}.ogg"
+            sf.write(f"{clip_dir}/{name}", np.clip(x, -1, 1), sr, format="OGG", subtype="VORBIS")
+            moved = float(np.sqrt(np.mean((x - base) ** 2)) / rms)
+            index.write(json.dumps({"plan": plan_name, "kind": kind, "unit": i, "dose": dose, "moved": moved,
+                                    "file": f"clips/{plan_name}/{name}"}) + "\n")
+        done = b + len(chunk)
+        if (b // 8) % 16 == 0 or done == len(jobs):
+            el = time.time() - t0
+            index.flush()
+            log(f"[{plan_name}] {done}/{len(jobs)} clips ({100 * done / len(jobs):.0f}%), {el / 60:.1f} min, "
+                f"ETA {el / done * (len(jobs) - done) / 60:.1f} min")
+            runs.commit()
+    index.close()
+    runs.commit()
+    return len(jobs)
+
+
+@app.local_entrypoint()
+def pilot():
+    """256 neurons + 256 random directions x 4 plans x 2 doses, one GPU per plan."""
+    make_plans.remote()
+    units = pilot_units()
+    total = sum(sweep_part.starmap([(name, units) for name in PLANS]))
+    print(f"pilot done: {total} clips", flush=True)
