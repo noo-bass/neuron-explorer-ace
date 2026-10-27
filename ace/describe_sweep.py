@@ -34,7 +34,18 @@ def pushes(run):
     return [(p, kind, i, d) for kind, i in units for p in r0["plans"] for d in (0.3, -0.3)]
 
 
-def describe(client, run, job):
+def describe(client, run, job, tries=6):
+    """Retry when Model Studio says too many requests (429), waiting longer each time."""
+    for attempt in range(tries):
+        try:
+            return describe_once(client, run, job)
+        except Exception as e:
+            if "429" not in str(e) or attempt == tries - 1:
+                raise
+            time.sleep(5 * 2 ** attempt)
+
+
+def describe_once(client, run, job):
     plan, kind, i, dose = job
     untouched, pushed = os.path.join(run, "clips", plan, "untouched.ogg"), os.path.join(run, "clips", plan, f"{kind}{i}_{dose:+g}.ogg")
     text, usage, t0 = "", None, time.time()
