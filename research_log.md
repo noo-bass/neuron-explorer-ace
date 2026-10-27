@@ -293,14 +293,23 @@ Per-layer Spearman ρ between the two scores is 0.84–0.95. The hypothesis is d
 
 **A stalled run.** With no duration given, ACE caps phase 1 at the model config's `max_new_tokens` (4,096). A wrecked run writes gibberish until that cap: one run sat for 37 minutes. Notes are normally ~150 tokens, so the script now caps phase 1 at 400.
 
-**Calibration ladder, L14 (partial, first caption; complete results to follow).** Taking Lyra's "calibrate per layer first" lesson: 4 random neurons and 4 random directions, doses ±{0.05, 0.1, 0.2, 0.4} of the full median norm, greedy, ACE's CFG 2.0. Three things so far:
-- **The coherent window is ~±0.05–0.2.** At ±0.4 all four neurons give multilingual word salad or a near-empty caption on at least one sign, three of them on both ("وية synth kawaii strong -805 puji…"), while random direction 0 stays readable at ±0.4. Real neuron directions break the output sooner than random ones, which is the same thing Lyra saw on Qwen3.5.
-- **Lyra's breakage measure misses this kind of breakage.** Distinct-4-gram ratio stays at 1.00 on the word salad, because it doesn't repeat; Qwen3.5 broke into loops ("extr extr…"), and the planner breaks into multilingual noise. A different measure is needed: the unsteered model's surprise at the caption (perplexity), or the share of tokens outside the prompt's script.
-- **"Did it change" is useless here too, and there's an attractor.** Even ±0.05 changes the caption on every unit run so far. Many pushes, random ones included, land on the same alternative ("A gentle, melancholic piano melody with a soft, felt-like tone and spacious reverb opens the track…", bpm 75): the baseline is one of two near-tied plans, and any small push flips it. This is Lyra's "Xiaomi" null in musical form, and it's why random controls stay in every design.
+**Calibration ladder, L14.** Taking Lyra's "calibrate per layer first" lesson: 4 random neurons and 4 random directions, doses ±{0.05, 0.1, 0.2, 0.4} of the full median norm, greedy, ACE's CFG 2.0, two captions ("warm lo-fi hip hop with dusty piano and soft drums", "a song"); `runs/ace_calib_L14.jsonl`. "Broken" = caption not plain ASCII or under 15 words (both baselines are long English prose):
 
-**Throughput.** ~5–6 s per notes run when coherent and ~14 s when wrecked (hitting the 400 cap), one caption plus its CFG twin at a time. At ~10 runs per neuron, a full layer of 6,144 neurons would take ~90 hours on this Mac sequentially, so the sweep needs batching or a CUDA pod before #2.
+| dose | neurons broken | random broken | mean \|Δbpm\| neurons / random (readable outputs) |
+|---|---|---|---|
+| ±0.05 | 0/16 | 0/16 | 2.4 / 3.7 |
+| ±0.1 | 0/16 | 0/16 | 6.8 / 6.4 |
+| ±0.2 | 0/16 | 0/16 | 17.4 / 15.9 |
+| ±0.4 | 14/16 | 13/16 | too few readable |
+
+- **The coherent window is ±0.2 or less, with a cliff before ±0.4.** At ±0.4 almost everything turns to multilingual word salad ("وية synth kawaii strong -805 puji…") or a one-word caption. Unlike Lyra's Qwen3.5 result, neurons don't break measurably sooner than random directions here: 14/16 vs 13/16. (A first read of the lo-fi caption alone suggested they did; the second caption didn't hold it up.)
+- **Lyra's breakage measure misses this kind of breakage.** Distinct-4-gram ratio stays near 1.00 on most of the word salad, because it doesn't repeat; Qwen3.5 broke into loops ("extr extr…"), and the planner breaks into multilingual noise. The ASCII/length rule above works for English captions; something language-independent (the unsteered model's surprise at the caption) is needed once captions vary.
+- **"Did it change" is useless here too, and the drift is large.** All 128 steered runs changed the notes, including every ±0.05. Random pushes move the tempo as much as neurons do, and at ±0.2 they switch genres outright (random direction 2 at −0.2 on "a song" → "a bright, plucked string instrument, possibly a guzheng or pipa"). Many pushes land on the same few alternatives ("A gentle, melancholic piano melody with a soft, felt-like tone…", bpm 75): the baseline is one of several near-tied plans, and a small push flips it. This is Lyra's "Xiaomi" null in musical form, and it's why random controls stay in every design.
+- **Proposed doses for L14:** ±0.1 and ±0.2 (the analogue of Lyra's +0.5 / −0.7 / +0.8 sitting just under her break point), with ±0.3 to be checked, since the cliff lies somewhere between 0.2 and 0.4.
+
+**Throughput.** ~5–6 s per notes run (6.9 s average including wrecked runs) when coherent and ~14 s when wrecked (hitting the 400 cap), one caption plus its CFG twin at a time. At ~10 runs per neuron, a full layer of 6,144 neurons would take ~90 hours on this Mac sequentially, so the sweep needs batching or a CUDA pod before #2.
 
 **Untested:**
-- The full ladder on the second caption ("a song"), and the same ladder at other depths.
+- The same ladder at other depths, and ±0.3 at L14.
 - A breakage measure that catches word salad.
 - Whether to measure the ruler without the massive channels instead of shrinking doses. The two are equivalent per layer if the massive channels' share is constant across tokens, but that hasn't been checked.
