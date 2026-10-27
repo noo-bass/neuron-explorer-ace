@@ -98,6 +98,9 @@ def main(run_dir):
             "tags": {t: float(d_tags[tagger.model.config.label2id[t]]) for t in TAGS},
             "tag_movers": [[lab[int(j)], float(d_tags[j])] for j in movers],
             "stems": {k: r["stems"][k] - base["stems"][k] for k in r["stems"]},
+            # what each tool returned for this clip on its own, before subtracting the untouched clip
+            "raw": {"signal": r["signal"], "stems_db": r["stems"],
+                    "tags_top10": [[lab[int(j)], float(r["tags"][j])] for j in np.argsort(-r["tags"])[:10]]},
         }
     path = os.path.join(run_dir, "describe_change.json")
     with open(path, "w") as fh:

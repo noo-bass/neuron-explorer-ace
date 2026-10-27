@@ -32,6 +32,11 @@ print(lm.initialize(checkpoint_dir=os.path.join(ACE, "checkpoints"), lm_model_pa
                     backend="pt", device="mps")[0], flush=True)
 print(f"loaded in {time.time() - t0:.0f}s; {len(files)} clips", flush=True)
 
+# keep the LM's raw reply, which understand_audio_from_codes parses and drops
+_generate = lm.generate_from_formatted_prompt
+replies = []
+lm.generate_from_formatted_prompt = lambda *a, **k: replies.append(_generate(*a, **k)) or replies[-1]
+
 out = {}
 for i, f in enumerate(files):
     t1 = time.time()
@@ -41,6 +46,8 @@ for i, f in enumerate(files):
     torch.manual_seed(0)
     meta, status = lm.understand_audio_from_codes(codes, temperature=0.3)
     out[f] = {k: meta.get(k) for k in ("caption", "bpm", "keyscale", "timesignature")}
+    out[f]["prompt"] = lm.build_formatted_prompt_for_understanding(codes)
+    out[f]["reply"] = replies[-1][0]
     print(f"[{i + 1}/{len(files)}] {f} ({time.time() - t1:.0f}s): {out[f]['caption']}", flush=True)
 
 path = os.path.join(args.run_dir, "describe_change_ace.json")
