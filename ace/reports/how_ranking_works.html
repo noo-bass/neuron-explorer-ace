@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>How Ranking Works</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root { --bg:#f5f6f4; --surface:#fff; --ink:#1d2321; --muted:#5d6763; --rule:#dde2df; --accent:#1f6f62; --accent-soft:#e2f0ec; --rand:#8a6d1f;
+  --c-neur:#008a72; --c-rand:#a8700a; --c-quiet:#b9c1bd; --band:#eef1ef;
+  --display:"Instrument Serif",Georgia,serif; --body:"Instrument Sans",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,Menlo,monospace; }
+@media (prefers-color-scheme: dark) { :root { --bg:#141816; --surface:#1c211f; --ink:#e7ebe9; --muted:#9aa5a0; --rule:#2e3532; --accent:#6fc7b5; --accent-soft:#1b302b; --rand:#d9b45e;
+  --c-neur:#1ea88f; --c-rand:#bd8616; --c-quiet:#4a5551; --band:#222927; color-scheme:dark; } }
+body { background:var(--bg); color:var(--ink); font:15px/1.55 var(--body); margin:0; }
+.wrap { max-width:860px; margin:0 auto; padding:32px max(16px,env(safe-area-inset-right,0px)) 64px max(16px,env(safe-area-inset-left,0px)); display:grid; gap:44px; }
+h1 { font:400 clamp(34px,6vw,50px)/1.05 var(--display); margin:0; }
+h2 { font:400 26px/1.2 var(--display); margin:0; }
+p { margin:0; max-width:68ch; } .muted { color:var(--muted); }
+.eyebrow { font:500 11px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+section { display:grid; gap:14px; }
+figure { margin:0; background:var(--surface); border:1px solid var(--rule); border-radius:6px; padding:16px; display:grid; gap:10px; }
+figcaption { font-size:13px; color:var(--muted); max-width:68ch; }
+svg { display:block; width:100%; height:auto; overflow:visible; }
+svg text { font-family:var(--body); fill:var(--ink); font-size:13px; }
+svg .small { font-size:11.5px; fill:var(--muted); }
+svg .mono { font-family:var(--mono); }
+.ink { stroke:var(--ink); } .mutedline { stroke:var(--muted); } .rule { stroke:var(--rule); }
+.neur { fill:var(--c-neur); } .rand { fill:var(--c-rand); } .quiet { fill:var(--c-quiet); }
+.halo { paint-order:stroke; stroke:var(--surface); stroke-width:4px; stroke-linejoin:round; }
+.legend { display:flex; flex-wrap:wrap; gap:6px 18px; font-size:13px; color:var(--muted); }
+.legend span { display:inline-flex; align-items:center; gap:6px; }
+.sw { width:10px; height:10px; border-radius:50%; display:inline-block; }
+.stat { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 14px; }
+.stat b { font:400 44px/1 var(--display); color:var(--c-neur); }
+.stat span { max-width:52ch; }
+.callout { background:var(--accent-soft); border:1px solid var(--accent); border-radius:6px; padding:16px 18px; display:grid; gap:10px; }
+.tablebox { overflow-x:auto; }
+table { border-collapse:collapse; width:100%; min-width:520px; font-size:14px; }
+th, td { text-align:left; padding:8px 12px 8px 0; border-bottom:1px solid var(--rule); vertical-align:top; }
+thead th { font:500 11px/1.3 var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+td.num { font-family:var(--mono); }
+.chart { position:relative; }
+.warn { color:#b3261e; font-weight:600; }
+</style>
+<body>
+<div class="wrap">
+
+<header style="display:grid;gap:12px">
+  <div class="eyebrow">ACE-Step 1.5 · renderer · layer 12 · how the ranking works</div>
+  <h1>Is this neuron special, or would any nudge do that?</h1>
+  <p class="muted">We pushed on hundreds of neurons inside a music model and measured what happened to the sound. This page walks through how we decide which ones stand out, one step at a time.</p>
+</header>
+
+<!-- 1 -->
+<section>
+  <div class="eyebrow">Step 1 · Where we are looking</div>
+  <h2>A list of numbers carries the music so far</h2>
+  <p>The part of ACE-Step we are studying is the <b>renderer</b>: the piece that turns a song plan into actual sound. The fast "turbo" version builds a 10-second clip in 8 passes, starting from noise and making it a little more like music each time.</p>
+  <p>Each pass runs the clip through a stack of 24 layers. Between one layer and the next, everything the model "knows" about the music at that moment travels as one long list of 2,048 numbers. We look at the list coming out of layer 12, the middle of the stack. If we change that list, everything after it has to work with the change.</p>
+  <figure>
+    <svg id="fig1" viewBox="0 0 640 230" role="img" aria-label="Eight passes turn noise into music; inside each pass, layers hand a list of 2,048 numbers to each other"></svg>
+    <figcaption>Top: the 8 passes. Bottom: zooming into one pass. Each small cell stands for a group of the 2,048 numbers; darker means a bigger number.</figcaption>
+  </figure>
+</section>
+
+<!-- 2 -->
+<section>
+  <div class="eyebrow">Step 2 · What a push is</div>
+  <h2>A push nudges the list along a pattern</h2>
+  <p>Layer 12 has 6,144 <b>neurons</b>. Each neuron has its own pattern over the 2,048 numbers: a recipe like "raise this one a lot, lower that one a little, leave this one alone". When the neuron fires, it adds its pattern to the list.</p>
+  <p>To <b>push</b> neuron 5455, we add a little extra of its pattern by hand, on every pass. Push size +0.3 means the extra is about three-tenths as big as what normally flows through this layer; -0.3 is the same pattern, pushed the other way. Why do it this way? Because it asks the model directly: "if this neuron were more active, what would the music do?"</p>
+  <figure>
+    <svg id="fig2" viewBox="0 0 640 250" role="img" aria-label="The list, plus 0.3 times the neuron's pattern, equals the pushed list"></svg>
+    <figcaption>Each bar is one number (only 40 of the 2,048 drawn). The pushed list is the original plus a small amount of the neuron's pattern.</figcaption>
+  </figure>
+</section>
+
+<!-- 3 -->
+<section>
+  <div class="eyebrow">Step 3 · The comparison push</div>
+  <h2>A random push: same size, no meaning</h2>
+  <p>A <b>random push</b> is exactly the same size of nudge, but along a made-up pattern that belongs to no neuron. It is like turning a dial with no label on it. We made 256 of these.</p>
+  <figure>
+    <svg id="fig3" viewBox="0 0 640 210" role="img" aria-label="Two arrows of equal length from the same point: one a neuron direction, one a random direction"></svg>
+    <figcaption>Think of a pattern as a direction to move in. The real list has 2,048 directions to move in, not two, but the idea is the same: both arrows have the same length; only the direction differs.</figcaption>
+  </figure>
+</section>
+
+<!-- 4 -->
+<section>
+  <div class="eyebrow">Step 4 · Why bother with random pushes</div>
+  <h2>Any nudge changes the music a bit</h2>
+  <p>Poke a finely balanced machine anywhere and something will change. So "pushing neuron 5455 changed the song" on its own tells us nothing. The real question is: <b>does the neuron change the music differently from a meaningless nudge of the same size?</b></p>
+  <p>The 256 random pushes show us what "nothing special" looks like. If a neuron's result sits inside the crowd of random results, we have no evidence it means anything. If it lands somewhere no random push ever reached, that is worth a closer look.</p>
+  <figure>
+    <svg id="fig4" viewBox="0 0 640 220" role="img" aria-label="A fan of random arrows of equal length with one neuron arrow among them"></svg>
+    <figcaption>The random arrows show the range of "nothing special". A neuron earns attention only by doing something none of them did.</figcaption>
+  </figure>
+</section>
+
+<!-- 5 -->
+<section>
+  <div class="eyebrow">Step 5 · What we measured</div>
+  <h2>Numbers about the sound, compared with the untouched song</h2>
+  <p>For every pushed clip we worked out a few simple numbers about the sound and compared each one with the same song rendered with no push. Two of them matter on this page:</p>
+  <ul style="margin:0;padding-left:20px;display:grid;gap:6px;max-width:68ch">
+    <li><b>Overall change</b>: how different the sound wave is from the untouched song. 0 means identical; bigger means more different. It cannot say <i>what</i> changed, only how much.</li>
+    <li><b>Note focus</b>: how much of the sound sits on a few musical notes. A clear chord gives high focus; hiss or noise spreads across all notes and gives low focus. We record how much the push raised or lowered it.</li>
+  </ul>
+  <p>Every push was tried on 4 songs: lo-fi with piano, a piano ballad, a rock band, and an ambient synth piece. We average the change across the 4, because a real effect should show up on more than one song, while a fluke on one song gets watered down.</p>
+  <figure>
+    <svg id="fig5" viewBox="0 0 640 215" role="img" aria-label="Four songs each give an overall-change number, which are averaged; and two note-focus examples"></svg>
+    <figcaption>Left: the real overall-change numbers for neuron 5455 at +0.3, averaged into one score. Right: what high and low note focus look like across the 12 notes of the scale.</figcaption>
+  </figure>
+</section>
+
+<!-- 6 -->
+<section>
+  <div class="eyebrow">Step 6 · The key chart</div>
+  <h2>Overall change: neurons against random pushes</h2>
+  <p>Each dot below is one push at +0.3, placed by its average overall change. The top row is the 256 random pushes; the bottom row is 256 neurons. The shaded strip is the territory random pushes cover: its right edge is the random push that changed the music most, and its left edge is the same distance on the other side of the random average.</p>
+  <figure>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--c-rand)"></i>random push</span>
+      <span><i class="sw" style="background:var(--c-neur)"></i>neuron outside every random push</span>
+      <span><i class="sw" style="background:var(--c-quiet)"></i>neuron inside the random range</span>
+    </div>
+    <div class="chart" id="chart-moved"></div>
+    <div class="stat"><b id="n-moved">-</b><span id="t-moved"></span></div>
+    <figcaption>Hover or tap a dot to see which push it is. Push size +0.3, average over 4 songs.</figcaption>
+  </figure>
+  <p><b>Why this is convincing:</b> if neurons were no different from random directions, they would be drawn from the same crowd, and about none of them would land beyond the most extreme random push. Instead, dozens do, and some land two or three times further out than any random push ever went.</p>
+</section>
+
+<!-- 7 -->
+<section>
+  <div class="eyebrow">Step 7 · Same test, another measure</div>
+  <h2>Note focus: neurons against random pushes</h2>
+  <p>Same chart, measuring how much each push raised or lowered note focus. Right of zero means the sound became more concentrated on a few notes; left means it spread out.</p>
+  <figure>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--c-rand)"></i>random push</span>
+      <span><i class="sw" style="background:var(--c-neur)"></i>neuron outside every random push</span>
+      <span><i class="sw" style="background:var(--c-quiet)"></i>neuron inside the random range</span>
+    </div>
+    <div class="chart" id="chart-chroma"></div>
+    <div class="stat"><b id="n-chroma">-</b><span id="t-chroma"></span></div>
+    <figcaption>Push size +0.3, average over 4 songs. Here the most extreme random push is on the left, so the right edge of the strip is the mirror one.</figcaption>
+  </figure>
+</section>
+
+<!-- 8 -->
+<section>
+  <div class="eyebrow">Step 8 · A caution</div>
+  <h2>"Changes more" is not "does one clear thing"</h2>
+  <p>Beating every random push tells us a neuron has an unusually strong grip on the sound. It does not tell us the grip does anything musical. Some of the top neurons might simply scramble the sound harder than a random nudge can.</p>
+  <figure>
+    <svg id="fig8" viewBox="0 0 640 170" role="img" aria-label="Illustration: two different kinds of change can score the same on overall change"></svg>
+    <figcaption>An illustration, not real data: the two pushed versions could score the same "overall change" while meaning completely different things.</figcaption>
+  </figure>
+  <p>There is a hint of this in the top five below: three of them (3905, 1675, 4933) are also the biggest raisers of note focus, meaning the sound collapsed onto a few notes. That could be a held drone rather than a musical idea. Nobody has listened to them yet.</p>
+  <div class="tablebox">
+    <table>
+      <thead><tr><th>Neuron</th><th>Average overall change</th><th>Per song (lo-fi, ballad, rock, ambient)</th><th>Songs agreeing</th></tr></thead>
+      <tbody id="top5"></tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <div class="eyebrow">Neuron 5455</div>
+    <p>Noo listened to neuron 5455 and heard it remove the chordal part on several songs: a clear, specific musical effect. Yet on overall change it sits <span id="n5455-moved"></span>, right in the middle of the random crowd. On note focus it lands <span id="n5455-chroma"></span>.</p>
+    <p>So these crude numbers catch <b>how much</b> changes, not yet <b>what</b> changes. Taking out one instrument can be a small change to the whole sound wave and still be the most meaningful thing in the list. That is what the next experiment, ticket #5, is for: a better automatic description of what changed, so neurons like 5455 can be found without listening to every clip.</p>
+  </div>
+</section>
+
+<!-- 9 -->
+<section>
+  <div class="eyebrow">Step 9 · Compared with the planner</div>
+  <p>In the earlier planner experiment, neuron pushes and random pushes broke the planner's song sheet about equally often, so neurons there did not stand apart. In the renderer they clearly do.</p>
+</section>
+
+<p class="muted" style="font-size:13px">Data: runs/renderer_sweep_L12/ranking.json (keys "moved +0.3" and "chroma_focus +0.3"). Counts on this page are computed from that file and checked against its own neurons_beyond_every_random.</p>
+</div>
+
+<script>
+const D = {"moved +0.3":{"lo":0.761865719105117,"hi":1.3611130714416504,"above":34,"below":7,"count":41,"rmean":1.0614893952733837,"rank5455":242,"neurons":[[5475,3.0012,22.07,4],[3905,2.9219,21.17,4],[1675,2.7787,19.54,4],[4999,2.6053,17.56,4],[4933,2.5707,17.17,4],[1396,2.4809,16.15,4],[5897,2.4062,15.3,4],[1544,2.3752,14.95,4],[1967,2.3681,14.87,4],[1432,2.2888,13.96,4],[4593,2.104,11.86,4],[5562,2.0997,11.81,4],[2131,1.92,9.77,4],[3033,1.8402,8.86,4],[4663,1.8343,8.79,4],[5583,1.6707,6.93,4],[475,1.6564,6.77,4],[9,1.6461,6.65,4],[4885,1.645,6.64,4],[2747,1.589,6.0,4],[959,0.5622,-5.68,4],[1816,1.5475,5.53,4],[3868,0.6029,-5.22,4],[3908,1.4978,4.96,4],[2899,1.4917,4.9,4],[5066,0.6501,-4.68,4],[5780,1.461,4.55,4],[4527,1.4568,4.5,4],[5766,1.4502,4.42,4],[2130,1.4485,4.4,4],[1225,1.4333,4.23,4],[2469,1.4289,4.18,4],[4126,1.4125,3.99,4],[647,0.713,-3.96,4],[5717,1.4055,3.91,4],[565,0.7364,-3.7,4],[5884,0.7383,-3.68,4],[3048,1.3735,3.55,4],[4189,0.75,-3.54,4],[4427,1.3721,3.53,4],[3670,1.3687,3.5,4],[3268,1.3422,3.19,4],[4814,1.3405,3.17,4],[3318,1.3404,3.17,4],[589,1.34,3.17,4],[316,0.7835,-3.16,4],[3358,1.3389,3.16,4],[824,1.3362,3.13,4],[1144,0.7871,-3.12,4],[5779,1.3347,3.11,4],[1203,0.7988,-2.99,4],[4162,1.3228,2.97,4],[4338,0.8018,-2.95,4],[4931,1.3186,2.93,4],[5661,0.8102,-2.86,4],[950,0.8162,-2.79,4],[5568,0.8168,-2.78,4],[4516,0.817,-2.78,4],[3981,1.3038,2.76,4],[218,0.8387,-2.53,4],[2055,0.8445,-2.47,4],[3557,0.8445,-2.47,4],[4961,0.8448,-2.47,4],[5196,1.2782,2.47,4],[5980,0.8452,-2.46,4],[3853,1.276,2.44,4],[3627,1.2752,2.43,4],[370,1.2689,2.36,4],[1014,0.8574,-2.32,4],[1792,0.858,-2.32,4],[5567,0.8587,-2.31,4],[2129,1.263,2.29,4],[4485,0.8622,-2.27,4],[2870,1.2607,2.27,4],[1167,0.8632,-2.26,4],[2300,0.8652,-2.23,4],[2220,0.8663,-2.22,4],[960,1.2542,2.19,4],[4429,0.8693,-2.19,4],[510,0.8698,-2.18,4],[776,0.8747,-2.12,4],[2308,0.8756,-2.12,4],[657,1.2444,2.08,4],[2805,0.8827,-2.03,4],[4650,0.8841,-2.02,4],[1809,0.8841,-2.02,4],[750,0.8873,-1.98,4],[944,0.8884,-1.97,4],[5730,0.8901,-1.95,4],[3154,0.8915,-1.93,4],[5013,0.8921,-1.93,4],[298,0.8929,-1.92,4],[4363,0.894,-1.91,4],[2052,0.8948,-1.9,4],[2656,0.8955,-1.89,4],[5005,0.897,-1.87,4],[4749,1.2252,1.86,4],[5317,0.8998,-1.84,4],[1983,1.2231,1.84,4],[3446,0.901,-1.83,4],[2938,0.9017,-1.82,4],[1256,0.9024,-1.81,4],[2934,0.9032,-1.8,4],[4167,1.2196,1.8,4],[2384,0.9042,-1.79,4],[5388,0.9043,-1.79,4],[5958,0.905,-1.78,4],[5778,0.9083,-1.74,4],[5820,0.9097,-1.73,4],[4968,0.9101,-1.72,4],[2133,0.9106,-1.72,4],[5020,0.9152,-1.66,4],[4449,0.9153,-1.66,4],[573,0.9163,-1.65,4],[1806,0.9172,-1.64,4],[2358,0.9172,-1.64,4],[3752,0.9183,-1.63,4],[500,0.9199,-1.61,4],[4719,1.199,1.56,4],[1506,0.924,-1.56,4],[4377,0.9246,-1.56,4],[1104,0.9259,-1.54,4],[3436,0.9268,-1.53,4],[2621,1.196,1.53,4],[1529,0.9277,-1.52,4],[5512,1.1941,1.51,4],[5577,0.9297,-1.5,4],[674,0.9306,-1.49,4],[1664,0.9307,-1.49,4],[2664,0.9311,-1.48,4],[2724,0.9322,-1.47,4],[1515,0.9331,-1.46,4],[1954,0.9353,-1.44,4],[4459,0.9355,-1.43,4],[1477,0.9357,-1.43,4],[3904,0.9369,-1.42,4],[893,0.9376,-1.41,4],[5605,0.9387,-1.4,4],[2886,0.9401,-1.38,4],[2540,0.9429,-1.35,4],[1559,0.9479,-1.29,4],[1066,1.1751,1.29,4],[3692,1.1745,1.29,4],[4586,0.9486,-1.28,4],[2590,0.9495,-1.27,4],[1929,0.9516,-1.25,4],[1022,0.9525,-1.24,4],[5790,0.9534,-1.23,4],[4889,1.1683,1.22,4],[747,0.9548,-1.21,4],[331,0.9551,-1.21,4],[270,0.9554,-1.21,4],[3156,1.1665,1.2,4],[4460,0.9602,-1.15,4],[4832,0.9609,-1.14,4],[659,0.9617,-1.13,4],[1725,0.9628,-1.12,4],[3205,0.963,-1.12,4],[4942,0.9637,-1.11,4],[2484,0.9638,-1.11,4],[4135,1.159,1.11,4],[4887,0.964,-1.11,4],[515,0.9659,-1.09,4],[764,0.966,-1.09,4],[5995,0.966,-1.09,4],[3827,1.1556,1.07,4],[4702,0.9679,-1.06,4],[3864,1.1538,1.05,4],[1666,0.971,-1.03,4],[2729,0.9733,-1.0,4],[2752,1.1487,0.99,4],[2704,0.9774,-0.96,4],[2254,0.9802,-0.92,4],[1326,0.9811,-0.91,4],[831,0.9817,-0.91,4],[2378,1.1406,0.9,4],[1998,0.9846,-0.87,4],[1565,0.9857,-0.86,4],[2356,0.99,-0.81,4],[3206,0.9908,-0.8,4],[1551,0.9909,-0.8,4],[5084,0.991,-0.8,4],[4810,0.9936,-0.77,4],[3624,0.9951,-0.76,4],[826,1.1244,0.72,4],[108,0.9995,-0.71,4],[5202,1.0009,-0.69,4],[5123,1.1209,0.68,4],[1789,1.1209,0.68,4],[1633,1.0022,-0.67,4],[980,1.0028,-0.67,4],[5163,1.1182,0.65,4],[1762,1.0073,-0.62,4],[1387,1.0087,-0.6,4],[3646,1.1137,0.59,4],[4483,1.1127,0.58,4],[322,1.1125,0.58,4],[3487,1.0114,-0.57,4],[3184,1.0118,-0.57,4],[177,1.0129,-0.55,4],[5409,1.0134,-0.55,4],[2466,1.0148,-0.53,4],[4009,1.1081,0.53,4],[4780,1.0184,-0.49,4],[4298,1.104,0.48,4],[2121,1.1023,0.46,4],[3573,1.1015,0.46,4],[2053,1.0221,-0.45,4],[6076,1.0223,-0.45,4],[2597,1.0226,-0.44,4],[735,1.1002,0.44,4],[2257,1.0993,0.43,4],[3948,1.0241,-0.43,4],[186,1.0979,0.41,4],[4271,1.0974,0.41,4],[3491,1.0966,0.4,4],[1990,1.0266,-0.4,4],[509,1.0956,0.39,4],[1296,1.0275,-0.39,4],[2928,1.0276,-0.39,4],[3926,1.0292,-0.37,4],[132,1.0299,-0.36,4],[5453,1.0314,-0.34,4],[4495,1.09,0.32,4],[4275,1.0895,0.32,4],[4668,1.035,-0.3,4],[5380,1.0353,-0.3,4],[5994,1.0368,-0.28,4],[4044,1.0857,0.28,4],[5253,1.0387,-0.26,4],[5601,1.084,0.26,4],[1198,1.0394,-0.25,4],[374,1.0829,0.24,4],[1140,1.0415,-0.23,4],[5984,1.0418,-0.22,4],[809,1.0782,0.19,4],[5247,1.0777,0.18,4],[4036,1.0771,0.18,4],[5738,1.0768,0.17,4],[101,1.0462,-0.17,4],[606,1.0467,-0.17,4],[5455,1.0762,0.17,4],[2551,1.047,-0.16,4],[1019,1.0743,0.15,4],[5541,1.071,0.11,4],[604,1.0705,0.1,4],[1594,1.0525,-0.1,4],[115,1.0528,-0.1,4],[2926,1.07,0.1,4],[749,1.0537,-0.09,4],[6056,1.0556,-0.07,4],[2725,1.0581,-0.04,4],[5300,1.0649,0.04,4],[2732,1.0583,-0.04,4],[3985,1.0638,0.03,4],[4716,1.0631,0.02,4]],"randoms":[[41,1.3611,3.41],[194,1.3506,3.29],[221,1.3249,3.0],[45,1.3153,2.89],[167,1.3074,2.8],[15,1.3008,2.72],[169,1.2765,2.45],[89,1.2747,2.43],[235,1.2572,2.23],[183,1.2464,2.1],[170,1.2449,2.09],[238,1.2426,2.06],[75,0.8972,-1.87],[131,1.2236,1.84],[153,1.2224,1.83],[58,0.9155,-1.66],[115,1.2066,1.65],[116,1.2038,1.62],[38,0.9196,-1.61],[174,1.2025,1.6],[33,1.2024,1.6],[242,1.2019,1.6],[49,0.9232,-1.57],[157,1.1992,1.57],[82,0.9243,-1.56],[71,1.1984,1.56],[57,1.1944,1.51],[199,0.9303,-1.49],[7,1.1921,1.49],[129,0.9316,-1.48],[9,0.9319,-1.47],[28,1.1906,1.47],[35,0.9326,-1.47],[198,0.9328,-1.46],[211,1.1894,1.46],[13,0.9336,-1.45],[23,1.1893,1.45],[65,0.935,-1.44],[197,1.1873,1.43],[91,1.1867,1.43],[154,1.1833,1.39],[223,0.9407,-1.37],[63,0.9433,-1.34],[12,0.9439,-1.34],[228,0.9449,-1.33],[48,0.9452,-1.32],[81,1.1773,1.32],[239,1.1757,1.3],[204,1.1753,1.29],[237,0.9488,-1.28],[220,0.9504,-1.26],[215,0.954,-1.22],[80,0.9546,-1.22],[59,1.1683,1.21],[159,0.9578,-1.18],[29,0.9586,-1.17],[16,0.9587,-1.17],[76,0.9591,-1.16],[133,0.9604,-1.15],[141,0.9617,-1.14],[252,0.9628,-1.12],[152,1.1583,1.1],[240,1.1572,1.09],[179,1.1571,1.09],[104,0.9659,-1.09],[95,0.966,-1.09],[0,0.9661,-1.09],[206,1.1554,1.07],[87,0.9678,-1.07],[189,1.1549,1.06],[181,0.9687,-1.06],[245,0.9687,-1.06],[142,1.1537,1.05],[62,0.9703,-1.04],[255,1.1521,1.03],[140,1.1515,1.02],[128,1.1509,1.02],[172,0.9724,-1.01],[93,0.9728,-1.01],[10,0.9731,-1.01],[53,1.1486,0.99],[177,0.9749,-0.99],[151,0.9761,-0.97],[123,0.9768,-0.96],[72,0.977,-0.96],[175,1.1454,0.95],[37,1.1453,0.95],[134,1.1451,0.95],[84,0.9798,-0.93],[208,1.1424,0.92],[42,0.982,-0.9],[132,1.1402,0.9],[251,1.1387,0.88],[171,1.1378,0.87],[146,0.9857,-0.86],[155,0.9857,-0.86],[158,1.1358,0.84],[143,0.9874,-0.84],[32,0.988,-0.84],[190,1.1348,0.83],[50,0.9891,-0.82],[209,1.1333,0.82],[188,1.1332,0.82],[203,0.9906,-0.81],[112,0.9931,-0.78],[47,0.9948,-0.76],[250,0.9951,-0.76],[231,0.9952,-0.75],[121,0.9961,-0.74],[25,0.9962,-0.74],[253,1.1266,0.74],[90,0.9985,-0.72],[66,1.1243,0.71],[36,0.9988,-0.71],[168,0.9991,-0.71],[114,1.0004,-0.7],[225,1.0005,-0.69],[97,1.1223,0.69],[136,1.1223,0.69],[202,1.0009,-0.69],[150,1.1215,0.68],[94,1.1209,0.68],[24,1.1201,0.67],[243,1.0035,-0.66],[118,1.1186,0.65],[102,1.005,-0.64],[86,1.0053,-0.64],[144,1.0057,-0.64],[244,1.1172,0.63],[3,1.0065,-0.63],[5,1.007,-0.62],[56,1.1149,0.61],[230,1.0084,-0.6],[68,1.1145,0.6],[106,1.0085,-0.6],[31,1.0091,-0.6],[92,1.0095,-0.59],[191,1.1133,0.59],[218,1.0099,-0.59],[226,1.01,-0.59],[160,1.113,0.59],[139,1.01,-0.59],[138,1.0114,-0.57],[55,1.0114,-0.57],[200,1.0116,-0.57],[51,1.0123,-0.56],[11,1.0124,-0.56],[119,1.013,-0.55],[27,1.0139,-0.54],[222,1.0143,-0.54],[8,1.0148,-0.53],[88,1.1078,0.53],[96,1.0155,-0.52],[212,1.0155,-0.52],[213,1.0162,-0.52],[178,1.0166,-0.51],[186,1.0177,-0.5],[241,1.0178,-0.5],[147,1.0179,-0.5],[85,1.0187,-0.49],[70,1.0187,-0.49],[111,1.0189,-0.48],[18,1.0195,-0.48],[248,1.0197,-0.48],[210,1.1031,0.47],[19,1.0201,-0.47],[216,1.0207,-0.46],[113,1.0214,-0.46],[156,1.0215,-0.45],[166,1.0219,-0.45],[173,1.0226,-0.44],[79,1.0237,-0.43],[64,1.0243,-0.42],[122,1.0983,0.42],[201,1.098,0.41],[163,1.0251,-0.41],[83,1.0265,-0.4],[20,1.0278,-0.38],[180,1.0948,0.38],[117,1.0947,0.38],[108,1.0286,-0.37],[182,1.0936,0.37],[124,1.0295,-0.36],[6,1.0304,-0.35],[214,1.092,0.35],[145,1.092,0.35],[233,1.0334,-0.32],[39,1.0335,-0.32],[135,1.0341,-0.31],[99,1.0345,-0.31],[17,1.0354,-0.3],[52,1.0357,-0.29],[224,1.0359,-0.29],[149,1.0368,-0.28],[43,1.0861,0.28],[165,1.0859,0.28],[126,1.0858,0.28],[148,1.0374,-0.27],[227,1.0384,-0.26],[176,1.0384,-0.26],[34,1.0394,-0.25],[74,1.0394,-0.25],[187,1.0399,-0.25],[103,1.0831,0.25],[120,1.0828,0.24],[196,1.0825,0.24],[161,1.0821,0.24],[61,1.0821,0.23],[249,1.0813,0.23],[67,1.0416,-0.23],[205,1.0423,-0.22],[46,1.0794,0.2],[2,1.0447,-0.19],[247,1.0781,0.19],[234,1.0768,0.17],[4,1.0463,-0.17],[185,1.0467,-0.17],[137,1.0468,-0.17],[22,1.047,-0.16],[130,1.0759,0.16],[195,1.0758,0.16],[110,1.0472,-0.16],[40,1.0756,0.16],[30,1.0755,0.16],[217,1.0755,0.16],[78,1.0754,0.16],[77,1.0481,-0.15],[127,1.0744,0.15],[192,1.0489,-0.14],[105,1.0735,0.14],[246,1.0499,-0.13],[107,1.0507,-0.12],[73,1.0714,0.11],[193,1.052,-0.11],[162,1.0522,-0.11],[21,1.0707,0.1],[1,1.0524,-0.1],[207,1.07,0.1],[125,1.0531,-0.1],[164,1.0535,-0.09],[26,1.054,-0.09],[60,1.0546,-0.08],[254,1.0683,0.08],[54,1.0551,-0.07],[69,1.0675,0.07],[219,1.0559,-0.06],[109,1.0565,-0.06],[236,1.0571,-0.05],[98,1.0659,0.05],[232,1.0571,-0.05],[101,1.0576,-0.04],[229,1.0577,-0.04],[100,1.0644,0.03],[44,1.0639,0.03],[184,1.0632,0.02],[14,1.0621,0.01]],"top5":[[5475,3.001,22.1,4,[2.72,3.47,2.74,3.07]],[3905,2.922,21.2,4,[2.15,3.81,2.27,3.46]],[1675,2.779,19.5,4,[2.23,3.21,2.61,3.07]],[4999,2.605,17.6,4,[2.14,3.24,2.16,2.88]],[4933,2.571,17.2,4,[1.93,3.47,2.1,2.78]]]},"chroma_focus +0.3":{"lo":-0.06017329916357994,"hi":0.051869018643628806,"above":21,"below":12,"count":33,"rmean":-0.0041521402599755675,"rank5455":32,"neurons":[[3905,0.4139,20.8,4],[4933,0.3749,18.86,4],[1675,0.3242,16.34,4],[5897,0.318,16.03,4],[5562,0.2667,13.48,4],[4999,0.2639,13.34,4],[3033,0.2466,12.48,4],[1544,0.2384,12.07,4],[4593,0.2343,11.86,4],[1396,0.1493,7.64,4],[4663,0.1416,7.25,4],[4885,0.1335,6.85,4],[2130,0.1256,6.45,4],[9,0.1175,6.06,4],[5583,0.1067,5.51,4],[1225,-0.1149,-5.51,4],[5779,0.1007,5.22,4],[2747,-0.0893,-4.24,4],[4162,0.0774,4.06,4],[370,0.0772,4.05,4],[5475,-0.0854,-4.04,4],[3853,0.0665,3.52,4],[960,0.0662,3.5,3],[3692,-0.0697,-3.26,3],[5512,-0.0687,-3.21,4],[4716,-0.0685,-3.2,3],[2597,-0.0685,-3.2,4],[589,-0.0681,-3.18,4],[4135,0.0581,3.1,3],[824,-0.0645,-3.0,3],[3318,-0.0623,-2.89,4],[5455,-0.0619,-2.87,3],[4427,-0.0618,-2.87,3],[4719,-0.0577,-2.66,3],[1967,0.0474,2.56,3],[3646,-0.0556,-2.56,4],[3670,-0.0536,-2.46,3],[5453,-0.053,-2.43,4],[893,-0.0527,-2.41,4],[2257,-0.0527,-2.41,3],[1633,0.0442,2.41,3],[322,-0.0522,-2.39,3],[3154,0.0433,2.36,4],[3184,-0.0512,-2.34,3],[5766,0.0422,2.31,3],[5730,0.0413,2.26,4],[5300,-0.0495,-2.26,4],[4429,0.04,2.2,4],[750,-0.0483,-2.2,4],[2551,0.0399,2.19,4],[2129,-0.0472,-2.14,4],[1506,0.0375,2.07,4],[3491,0.0375,2.07,4],[4749,0.0365,2.02,3],[4702,0.0363,2.01,3],[4044,-0.0438,-1.97,4],[4495,0.035,1.95,3],[177,0.0347,1.93,4],[1022,0.0346,1.93,3],[500,0.0345,1.92,3],[1066,-0.0415,-1.86,2],[2870,0.0332,1.86,2],[831,0.0328,1.84,3],[3926,-0.041,-1.83,4],[3948,-0.0407,-1.82,4],[2308,0.0313,1.76,4],[2055,0.0308,1.74,4],[3557,-0.0388,-1.72,4],[3268,0.0299,1.69,3],[2466,0.0296,1.68,4],[606,0.0295,1.67,2],[316,0.0292,1.66,3],[1816,-0.0369,-1.63,3],[3048,-0.0362,-1.6,2],[1792,-0.0359,-1.58,3],[657,-0.035,-1.53,2],[1983,-0.0339,-1.48,3],[3573,-0.0338,-1.47,3],[5994,-0.0337,-1.47,3],[5409,-0.0336,-1.46,3],[4483,-0.0326,-1.42,3],[4931,-0.0326,-1.41,2],[4275,-0.0317,-1.37,4],[5980,0.0228,1.34,3],[1551,0.0224,1.32,4],[5196,0.0222,1.31,3],[1666,0.0217,1.28,2],[2590,0.0216,1.28,2],[1198,0.0215,1.28,3],[2926,-0.0296,-1.27,3],[749,-0.0296,-1.26,2],[4810,0.0212,1.26,3],[5984,-0.0295,-1.26,3],[4942,-0.0291,-1.24,3],[3981,0.0204,1.22,2],[2899,-0.0285,-1.21,2],[475,-0.028,-1.19,2],[5380,-0.0279,-1.18,3],[218,0.0192,1.16,4],[2752,-0.0267,-1.12,3],[5317,0.0172,1.06,3],[2724,0.0172,1.06,3],[747,0.0171,1.06,3],[132,-0.025,-1.04,3],[1565,-0.0248,-1.03,3],[2656,-0.0246,-1.02,4],[5163,-0.0245,-1.01,3],[5247,0.0162,1.01,2],[4167,0.0159,1.0,3],[4780,0.0158,0.99,3],[1104,-0.024,-0.99,4],[4887,-0.0237,-0.97,3],[4668,-0.0236,-0.97,3],[3868,-0.0231,-0.94,3],[5778,0.0148,0.94,2],[809,-0.023,-0.94,3],[2886,0.0146,0.93,3],[1762,0.0141,0.91,3],[515,-0.0223,-0.9,3],[5995,0.0139,0.9,2],[4338,-0.0219,-0.88,3],[2220,0.0133,0.87,2],[2378,-0.021,-0.84,3],[1387,-0.021,-0.84,2],[2540,0.0126,0.83,4],[1529,-0.0209,-0.83,4],[1789,-0.0207,-0.82,3],[1432,-0.0204,-0.81,2],[5388,0.012,0.81,1],[4485,-0.0202,-0.8,3],[2356,0.0119,0.8,2],[1990,0.0118,0.79,2],[6076,0.0116,0.79,3],[5884,-0.0199,-0.78,3],[573,0.0114,0.77,1],[776,0.0111,0.76,3],[1998,0.0108,0.74,2],[980,-0.0188,-0.73,3],[4968,0.01,0.71,3],[3436,0.01,0.7,2],[2121,0.0095,0.68,2],[4036,-0.0176,-0.67,3],[3358,0.0093,0.67,1],[1594,0.0092,0.67,3],[5780,-0.0175,-0.66,2],[5601,0.0091,0.66,2],[1477,0.0086,0.63,3],[3627,-0.0168,-0.63,2],[270,-0.0167,-0.62,3],[5790,-0.0167,-0.62,2],[647,0.0083,0.62,3],[3487,-0.0166,-0.62,4],[764,0.0083,0.62,2],[4460,0.0083,0.62,2],[4189,-0.0162,-0.6,3],[3864,-0.0161,-0.6,3],[5568,0.0073,0.57,3],[1725,0.0072,0.56,2],[1014,-0.0151,-0.55,3],[1326,-0.0151,-0.54,3],[2254,-0.0149,-0.54,3],[101,0.0065,0.53,3],[5202,-0.0148,-0.53,3],[2729,0.0064,0.53,2],[509,-0.0146,-0.52,3],[4527,0.0061,0.51,2],[3827,0.0061,0.51,3],[1144,-0.0144,-0.51,3],[5253,0.0061,0.51,3],[959,0.006,0.51,3],[5958,-0.0139,-0.49,4],[2052,-0.0137,-0.48,3],[2704,0.0053,0.47,2],[1515,0.0052,0.47,2],[2358,-0.0135,-0.47,3],[950,-0.0133,-0.46,3],[1664,-0.0133,-0.45,3],[298,0.005,0.45,2],[565,-0.0133,-0.45,4],[674,0.0048,0.44,1],[5123,0.0047,0.44,3],[3908,0.0045,0.43,3],[2384,0.0043,0.42,1],[2928,0.0041,0.41,2],[2805,-0.0123,-0.41,3],[4449,-0.0122,-0.4,3],[4961,-0.0122,-0.4,3],[1954,0.0039,0.4,2],[1019,0.0038,0.39,3],[1140,-0.0117,-0.37,4],[944,-0.0114,-0.36,3],[3205,0.0029,0.35,3],[1296,0.0028,0.35,2],[4459,0.0028,0.35,2],[4271,-0.0111,-0.34,3],[2133,-0.0111,-0.34,4],[4650,0.0027,0.34,2],[2131,0.0026,0.33,3],[5567,0.0023,0.32,2],[4832,-0.0106,-0.32,2],[1203,0.0022,0.32,1],[1256,0.002,0.31,2],[4009,-0.0099,-0.29,2],[115,-0.0099,-0.29,2],[3904,0.0015,0.28,2],[374,0.0013,0.27,2],[3206,0.0013,0.27,3],[5738,-0.0096,-0.27,2],[2664,-0.0096,-0.27,2],[5661,0.0012,0.27,3],[4377,0.001,0.26,1],[5577,-0.0093,-0.26,3],[826,0.0009,0.25,3],[5013,0.0008,0.25,2],[4298,-0.0086,-0.22,1],[2725,0.0002,0.22,2],[2484,-0.0083,-0.21,2],[3624,-0.0082,-0.2,2],[5005,-0.0082,-0.2,3],[4586,-0.0082,-0.2,3],[5084,-0.0082,-0.2,3],[2621,-0.0081,-0.2,2],[3446,-0.0002,0.2,2],[659,-0.008,-0.19,2],[186,-0.0006,0.18,3],[2469,-0.0007,0.17,2],[510,-0.0073,-0.15,3],[4814,-0.0071,-0.15,2],[1559,-0.0013,0.14,3],[3156,-0.0013,0.14,2],[2053,-0.0069,-0.14,3],[604,-0.0014,0.14,2],[5541,-0.0016,0.13,3],[1929,-0.0017,0.12,1],[4363,-0.0017,0.12,2],[6056,-0.0065,-0.12,3],[2300,-0.006,-0.09,1],[5020,-0.0057,-0.08,3],[108,-0.0026,0.08,1],[3985,-0.0026,0.08,2],[5066,-0.0056,-0.07,2],[4126,-0.0056,-0.07,2],[2938,-0.0029,0.06,2],[3752,-0.0029,0.06,2],[1806,-0.0053,-0.06,2],[5820,-0.0053,-0.06,2],[5605,-0.003,0.06,3],[4516,-0.0031,0.05,2],[4889,-0.0032,0.05,2],[331,-0.0051,-0.05,2],[1809,-0.0033,0.04,2],[1167,-0.0033,0.04,2],[2934,-0.0037,0.02,2],[735,-0.0039,0.01,3],[5717,-0.004,0.01,2],[2732,-0.0041,0.0,1]],"randoms":[[46,-0.0602,-2.79],[88,-0.0545,-2.51],[192,-0.0542,-2.49],[112,0.0454,2.46],[249,-0.0526,-2.41],[210,0.0428,2.34],[197,0.0426,2.33],[194,-0.0507,-2.32],[29,0.0415,2.27],[189,0.0404,2.22],[174,0.0402,2.21],[221,-0.0472,-2.14],[235,0.0371,2.05],[227,-0.0452,-2.04],[15,-0.0447,-2.02],[167,-0.0442,-1.99],[225,0.0343,1.92],[171,0.0332,1.86],[2,-0.041,-1.83],[51,0.032,1.8],[216,-0.0398,-1.77],[31,0.0309,1.75],[97,-0.0392,-1.74],[254,-0.0391,-1.74],[85,0.0293,1.67],[58,0.0293,1.66],[153,-0.0374,-1.65],[4,-0.0372,-1.65],[143,-0.037,-1.63],[105,0.0283,1.62],[228,0.0277,1.59],[21,0.0275,1.58],[111,0.0274,1.57],[241,0.0271,1.56],[158,0.027,1.55],[93,0.0264,1.52],[127,-0.0346,-1.51],[130,0.0256,1.48],[226,-0.0326,-1.42],[128,-0.0319,-1.38],[205,-0.0317,-1.37],[103,0.0232,1.36],[150,0.023,1.35],[166,-0.0312,-1.35],[183,-0.0311,-1.34],[94,-0.031,-1.33],[104,0.0226,1.33],[136,-0.0308,-1.32],[34,0.0224,1.32],[230,-0.03,-1.29],[62,-0.0295,-1.26],[44,-0.0294,-1.26],[53,0.0211,1.26],[8,0.0209,1.25],[255,-0.0288,-1.22],[14,0.0203,1.22],[41,-0.0286,-1.22],[195,-0.0286,-1.22],[124,-0.0284,-1.21],[163,-0.0283,-1.2],[236,-0.0279,-1.18],[20,0.0196,1.18],[27,0.0193,1.17],[223,-0.0276,-1.17],[156,0.0191,1.16],[40,-0.0272,-1.15],[28,-0.0272,-1.15],[79,-0.027,-1.14],[61,0.0185,1.12],[64,-0.0264,-1.11],[54,0.018,1.1],[134,0.0174,1.07],[148,0.0172,1.06],[238,-0.0252,-1.05],[56,0.0168,1.04],[176,-0.025,-1.04],[73,0.0164,1.02],[45,0.0163,1.02],[206,0.0162,1.01],[214,0.0159,1.0],[68,-0.0242,-1.0],[71,-0.0239,-0.98],[159,0.0154,0.97],[99,0.0154,0.97],[219,0.0153,0.97],[201,0.0152,0.96],[95,-0.0235,-0.96],[98,0.0146,0.93],[25,0.0145,0.93],[239,-0.0226,-0.92],[16,-0.0225,-0.91],[109,0.014,0.91],[118,0.0135,0.88],[212,-0.0216,-0.87],[75,-0.0214,-0.86],[81,-0.0214,-0.86],[48,-0.0212,-0.85],[242,-0.0212,-0.85],[200,0.0125,0.83],[63,-0.0208,-0.83],[49,0.0124,0.82],[65,0.0124,0.82],[243,0.0124,0.82],[151,-0.0204,-0.81],[250,0.0119,0.8],[90,0.0118,0.8],[67,0.0117,0.79],[69,0.0113,0.77],[160,0.0111,0.76],[91,0.011,0.75],[188,0.0106,0.74],[186,0.0105,0.73],[37,0.0104,0.72],[122,-0.0187,-0.72],[57,-0.0186,-0.72],[3,0.0103,0.72],[117,0.0103,0.72],[173,0.0102,0.71],[92,0.01,0.7],[77,0.0097,0.69],[19,-0.018,-0.69],[86,0.0095,0.68],[177,-0.0178,-0.68],[50,-0.0177,-0.68],[179,0.0093,0.67],[246,-0.0176,-0.67],[172,0.0092,0.67],[229,0.0092,0.67],[202,-0.0173,-0.65],[113,-0.0173,-0.65],[161,-0.0172,-0.65],[114,0.0089,0.65],[138,-0.0171,-0.64],[169,-0.0169,-0.63],[144,0.0083,0.62],[231,0.0082,0.62],[187,-0.0165,-0.61],[125,-0.0164,-0.61],[0,-0.0163,-0.6],[106,0.0076,0.58],[147,0.0075,0.58],[121,-0.0157,-0.57],[193,-0.0156,-0.57],[209,-0.0156,-0.57],[222,-0.0155,-0.56],[119,0.0071,0.56],[23,-0.0153,-0.56],[245,-0.0152,-0.55],[132,0.0068,0.54],[196,0.0068,0.54],[108,-0.015,-0.54],[43,-0.0148,-0.53],[52,-0.0148,-0.53],[5,-0.0148,-0.53],[135,-0.0147,-0.53],[157,-0.0147,-0.53],[155,0.0062,0.52],[6,-0.0143,-0.51],[72,0.0059,0.5],[191,-0.0141,-0.5],[224,0.0056,0.49],[33,-0.0139,-0.49],[82,-0.0139,-0.48],[146,0.0056,0.48],[120,-0.0138,-0.48],[207,0.0055,0.48],[178,0.0051,0.46],[252,0.005,0.46],[9,-0.0131,-0.44],[1,0.0047,0.44],[78,0.0046,0.44],[170,-0.0129,-0.43],[139,0.0045,0.43],[123,-0.0128,-0.43],[215,0.0044,0.42],[55,0.0043,0.42],[233,-0.0122,-0.4],[184,-0.0122,-0.4],[32,0.0037,0.39],[7,-0.012,-0.39],[131,-0.0113,-0.36],[83,0.0028,0.35],[142,-0.0111,-0.35],[168,-0.0111,-0.34],[185,0.0024,0.33],[26,-0.0107,-0.33],[251,0.0022,0.32],[140,0.0022,0.32],[89,-0.0103,-0.31],[162,0.0017,0.29],[237,-0.01,-0.29],[39,-0.0099,-0.29],[182,0.0016,0.29],[18,-0.0097,-0.28],[36,0.0013,0.27],[208,-0.0096,-0.27],[24,0.0011,0.26],[101,0.001,0.26],[12,-0.0092,-0.25],[137,0.0009,0.25],[102,0.0007,0.24],[232,-0.009,-0.24],[76,-0.0089,-0.24],[180,0.0005,0.23],[35,0.0004,0.23],[244,-0.0087,-0.23],[234,-0.0086,-0.22],[126,0.0003,0.22],[152,-0.0086,-0.22],[60,-0.0086,-0.22],[22,-0.0084,-0.21],[203,-0.0082,-0.2],[17,-0.0002,0.2],[240,-0.0081,-0.2],[175,-0.0003,0.19],[11,-0.0005,0.18],[213,-0.0077,-0.18],[110,-0.0077,-0.17],[66,-0.0076,-0.17],[165,-0.0008,0.17],[218,-0.0008,0.17],[164,-0.0075,-0.16],[84,-0.001,0.16],[248,-0.0073,-0.16],[149,-0.0072,-0.15],[70,-0.0012,0.15],[38,-0.0069,-0.14],[199,-0.0068,-0.13],[145,-0.0016,0.13],[133,-0.0017,0.12],[13,-0.0065,-0.12],[198,-0.0065,-0.12],[220,-0.0064,-0.11],[80,-0.0063,-0.1],[211,-0.0022,0.1],[42,-0.0057,-0.08],[30,-0.0027,0.07],[181,-0.003,0.06],[217,-0.0053,-0.06],[47,-0.0052,-0.05],[107,-0.0052,-0.05],[154,-0.0031,0.05],[129,-0.0051,-0.05],[141,-0.0051,-0.05],[190,-0.0049,-0.04],[96,-0.0034,0.04],[10,-0.0047,-0.03],[87,-0.0036,0.03],[74,-0.0037,0.02],[100,-0.0046,-0.02],[204,-0.0037,0.02],[247,-0.0045,-0.02],[59,-0.0045,-0.02],[115,-0.004,0.01],[116,-0.0043,-0.01],[253,-0.0042,-0.0]],"top5":[[3905,0.414,20.8,4,[0.4,0.3,0.49,0.47]],[4933,0.375,18.9,4,[0.32,0.3,0.48,0.4]],[1675,0.324,16.3,4,[0.36,0.2,0.5,0.24]],[5897,0.318,16.0,4,[0.43,0.19,0.38,0.28]],[5562,0.267,13.5,4,[0.2,0.21,0.38,0.28]]]},"n5455_moved_changes":[1.107,1.014,0.956,1.228],"n5455_chroma_changes":[-0.089,-0.189,-0.004,0.034],"rank5455":{"moved":242,"chroma":32}};
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+// small deterministic pseudo-random numbers so the diagrams are stable
+let seed = 7; function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+function arrowHead(defs, id, cls) {
+  const m = el("marker", {id, viewBox:"0 0 10 10", refX:"8", refY:"5", markerWidth:"7", markerHeight:"7", orient:"auto-start-reverse"}, defs);
+  el("path", {d:"M0,0 L10,5 L0,10 z", class:cls}, m);
+}
+
+/* ---------- Figure 1: passes and layers ---------- */
+(function () {
+  const s = document.getElementById("fig1");
+  const defs = el("defs", {}, s);
+  arrowHead(defs, "a1", "quiet");
+  el("text", {x:0, y:20, class:"small"}, s, "noise");
+  for (let i = 0; i < 8; i++) {
+    const x = 70 + i * 62;
+    el("rect", {x, y:6, width:44, height:22, rx:4, fill:"var(--accent-soft)", stroke: i === 3 ? "var(--accent)" : "var(--rule)", "stroke-width": i === 3 ? 2 : 1}, s);
+    el("text", {x:x + 22, y:21, "text-anchor":"middle", class:"small mono"}, s, "pass " + (i + 1));
+    if (i < 7) el("line", {x1:x + 46, y1:17, x2:x + 60, y2:17, stroke:"var(--c-quiet)", "stroke-width":1.5, "marker-end":"url(#a1)"}, s);
+  }
+  el("text", {x:640, y:20, "text-anchor":"end", class:"small"}, s, "music");
+  // zoom guides
+  el("path", {d:"M 256 30 L 20 70 M 300 30 L 620 70", stroke:"var(--rule)", fill:"none", "stroke-dasharray":"3 3"}, s);
+  // layers
+  const layers = [["layer 11", 20], ["layer 12", 250], ["layer 13", 480]];
+  layers.forEach(([name, x]) => {
+    el("rect", {x, y:80, width:140, height:40, rx:6, fill:"var(--bg)", stroke: name === "layer 12" ? "var(--accent)" : "var(--rule)", "stroke-width": name === "layer 12" ? 2 : 1}, s);
+    el("text", {x:x + 70, y:105, "text-anchor":"middle"}, s, name);
+  });
+  // strips of numbers between layers
+  function strip(x, y, w, n, strong) {
+    const cw = w / n;
+    for (let i = 0; i < n; i++) {
+      el("rect", {x:x + i * cw + 0.5, y, width:cw - 1, height:16, fill:"var(--c-neur)", "fill-opacity": (0.15 + 0.8 * rnd()) * (strong ? 1 : 0.6)}, s);
+    }
+  }
+  strip(166, 92, 80, 10, false);
+  strip(396, 92, 80, 10, true);
+  el("line", {x1:160, y1:100, x2:166, y2:100, class:"mutedline"}, s);
+  el("line", {x1:476, y1:100, x2:480, y2:100, class:"mutedline"}, s);
+  // label the layer 12 output
+  el("path", {d:"M 436 112 L 436 150", stroke:"var(--accent)", fill:"none", "stroke-width":1.5}, s);
+  el("rect", {x:396, y:90, width:80, height:20, fill:"none", stroke:"var(--accent)", "stroke-width":1.5, rx:2}, s);
+  el("text", {x:436, y:168, "text-anchor":"middle"}, s, "2,048 numbers");
+  el("text", {x:436, y:186, "text-anchor":"middle", class:"small"}, s, "“what the music is so far”");
+  el("text", {x:436, y:214, "text-anchor":"middle", class:"small"}, s, "this is the list we push on");
+  el("text", {x:20, y:160, class:"small"}, s, "… layers 1 to 10 before,");
+  el("text", {x:20, y:176, class:"small"}, s, "layers 14 to 24 after …");
+})();
+
+/* ---------- Figure 2: list + pattern = pushed list ---------- */
+(function () {
+  const s = document.getElementById("fig2");
+  const n = 40, x0 = 150, w = 480, bw = w / n;
+  const base = [], pat = [];
+  for (let i = 0; i < n; i++) { base.push((rnd() - 0.5) * 1.4); pat.push((rnd() - 0.5) * 2 * (rnd() < 0.35 ? 1 : 0.25)); }
+  const rows = [
+    ["the list now", base, "quiet", 40],
+    ["+ 0.3 × neuron 5455’s pattern", pat.map(v => v * 0.3 * 2.2), "neur", 125],
+    ["= the pushed list", base.map((v, i) => v + pat[i] * 0.3 * 2.2), "mix", 210],
+  ];
+  rows.forEach(([label, vals, cls, cy]) => {
+    const lines = label.split(" × ");
+    if (lines.length === 2) {
+      el("text", {x:0, y:cy - 4}, s, lines[0] + " ×");
+      el("text", {x:0, y:cy + 12}, s, lines[1]);
+    } else el("text", {x:0, y:cy + 4}, s, label);
+    el("line", {x1:x0, y1:cy, x2:x0 + w, y2:cy, class:"rule"}, s);
+    vals.forEach((v, i) => {
+      const h = Math.abs(v) * 28;
+      const y = v >= 0 ? cy - h : cy;
+      if (cls === "mix") {
+        const b = base[i] * 28, bh = Math.abs(b);
+        el("rect", {x:x0 + i * bw + 1, y: b >= 0 ? cy - bh : cy, width:bw - 2, height:Math.max(bh, 0.5), class:"quiet"}, s);
+        el("rect", {x:x0 + i * bw + 1, y, width:bw - 2, height:Math.max(h, 0.5), fill:"none", stroke:"var(--c-neur)", "stroke-width":1.2}, s);
+      } else {
+        el("rect", {x:x0 + i * bw + 1, y, width:bw - 2, height:Math.max(h, 0.5), class:cls}, s);
+      }
+    });
+  });
+  el("text", {x:x0 + w, y:248, "text-anchor":"end", class:"small"}, s, "outline = new value, grey = old value");
+})();
+
+/* ---------- Figure 3: two equal arrows ---------- */
+(function () {
+  const s = document.getElementById("fig3");
+  const defs = el("defs", {}, s);
+  arrowHead(defs, "an", "neur"); arrowHead(defs, "ar", "rand");
+  const cx = 230, cy = 120, L = 90;
+  el("circle", {cx, cy, r:L, fill:"none", stroke:"var(--rule)", "stroke-dasharray":"4 4"}, s);
+  el("circle", {cx, cy, r:4, fill:"var(--ink)"}, s);
+  el("text", {x:cx - 10, y:cy + 20, "text-anchor":"end", class:"small"}, s, "the song as it is");
+  const an = -0.6, ar = -2.35;
+  el("line", {x1:cx, y1:cy, x2:cx + L * Math.cos(an), y2:cy + L * Math.sin(an), stroke:"var(--c-neur)", "stroke-width":3, "marker-end":"url(#an)"}, s);
+  el("line", {x1:cx, y1:cy, x2:cx + L * Math.cos(ar), y2:cy + L * Math.sin(ar), stroke:"var(--c-rand)", "stroke-width":3, "marker-end":"url(#ar)"}, s);
+  el("text", {x:cx + L * Math.cos(an) + 10, y:cy + L * Math.sin(an) - 2}, s, "push neuron 5455");
+  el("text", {x:cx + L * Math.cos(ar) - 8, y:cy + L * Math.sin(ar) - 8, "text-anchor":"end"}, s, "random push");
+  el("text", {x:400, y:150, class:"small"}, s, "dashed circle: every point the");
+  el("text", {x:400, y:166, class:"small"}, s, "same size of push could reach");
+  el("text", {x:400, y:190, class:"small"}, s, "both arrows: equal length");
+})();
+
+/* ---------- Figure 4: fan of random arrows ---------- */
+(function () {
+  const s = document.getElementById("fig4");
+  const defs = el("defs", {}, s);
+  arrowHead(defs, "an4", "neur"); arrowHead(defs, "ar4", "rand");
+  const cx = 320, cy = 110, L = 85;
+  for (let i = 0; i < 18; i++) {
+    const a = (i / 18) * Math.PI * 2 + rnd() * 0.25;
+    el("line", {x1:cx, y1:cy, x2:cx + L * Math.cos(a), y2:cy + L * Math.sin(a), stroke:"var(--c-rand)", "stroke-width":1.5, "stroke-opacity":0.75, "marker-end":"url(#ar4)"}, s);
+  }
+  const a = -0.95;
+  el("line", {x1:cx, y1:cy, x2:cx + L * Math.cos(a), y2:cy + L * Math.sin(a), stroke:"var(--c-neur)", "stroke-width":3.5, "marker-end":"url(#an4)"}, s);
+  el("circle", {cx, cy, r:4, fill:"var(--ink)"}, s);
+  el("text", {x:cx + L * Math.cos(a) + 8, y:cy + L * Math.sin(a) - 4, class:"halo"}, s, "a neuron");
+  el("text", {x:40, y:40}, s, "256 random pushes:");
+  el("text", {x:40, y:58, class:"small"}, s, "what a meaningless");
+  el("text", {x:40, y:74, class:"small"}, s, "nudge does");
+  el("text", {x:470, y:170}, s, "the question:");
+  el("text", {x:470, y:188, class:"small"}, s, "does the neuron land");
+  el("text", {x:470, y:204, class:"small"}, s, "where none of them do?");
+})();
+
+/* ---------- Figure 5: four songs averaged; note focus ---------- */
+(function () {
+  const s = document.getElementById("fig5");
+  const songs = ["lo-fi piano", "piano ballad", "rock band", "ambient synth"];
+  const vals = D.n5455_moved_changes;
+  songs.forEach((name, i) => {
+    const y = 18 + i * 50;
+    el("rect", {x:0, y, width:118, height:34, rx:5, fill:"var(--bg)", stroke:"var(--rule)"}, s);
+    el("text", {x:10, y:y + 22}, s, name);
+    el("line", {x1:120, y1:y + 17, x2:150, y2:y + 17, class:"rule"}, s);
+    el("text", {x:156, y:y + 22, class:"mono"}, s, vals[i].toFixed(2));
+    el("path", {d:`M 196 ${y + 17} C 220 ${y + 17}, 215 113, 236 113`, stroke:"var(--rule)", fill:"none"}, s);
+  });
+  el("rect", {x:236, y:94, width:70, height:38, rx:5, fill:"var(--accent-soft)", stroke:"var(--accent)"}, s);
+  el("text", {x:271, y:118, "text-anchor":"middle", class:"mono"}, s, (vals.reduce((a, b) => a + b, 0) / 4).toFixed(2));
+  el("text", {x:271, y:150, "text-anchor":"middle", class:"small"}, s, "average");
+  el("text", {x:271, y:165, "text-anchor":"middle", class:"small"}, s, "overall change");
+  // note focus panels
+  function notes(x, y, heights, title, sub) {
+    el("text", {x, y:y - 34}, s, title);
+    el("text", {x, y:y - 18, class:"small"}, s, sub);
+    heights.forEach((h, i) => el("rect", {x:x + i * 11, y:y + 60 - h * 60, width:8, height:Math.max(h * 60, 1), rx:2, class:"neur"}, s));
+    el("line", {x1:x, y1:y + 60.5, x2:x + 130, y2:y + 60.5, class:"rule"}, s);
+    el("text", {x, y:y + 76, class:"small"}, s, "12 notes, C to B");
+  }
+  notes(350, 60, [1, 0.05, 0.05, 0.08, 0.85, 0.05, 0.05, 0.9, 0.05, 0.05, 0.08, 0.05], "Clear chord", "high note focus");
+  notes(500, 60, [0.42, 0.38, 0.45, 0.4, 0.43, 0.37, 0.44, 0.41, 0.39, 0.42, 0.4, 0.43], "Noise", "low note focus");
+})();
+
+/* ---------- Figure 8: how much vs what ---------- */
+(function () {
+  const s = document.getElementById("fig8");
+  function wave(x, y, w, fn, cls) {
+    let d = "";
+    for (let i = 0; i <= 200; i++) { const t = i / 200; d += (i ? "L" : "M") + (x + t * w).toFixed(1) + "," + (y + fn(t)).toFixed(1); }
+    el("path", {d, fill:"none", stroke:cls, "stroke-width":1.4}, s);
+  }
+  const orig = t => 14 * Math.sin(t * 40) * 0.6 + 8 * Math.sin(t * 97);
+  seed = 11;
+  const noise = []; for (let i = 0; i <= 200; i++) noise.push((rnd() - 0.5) * 34);
+  el("text", {x:0, y:16}, s, "untouched");
+  wave(0, 60, 180, orig, "var(--muted)");
+  el("text", {x:230, y:16}, s, "pushed: scrambled");
+  wave(230, 60, 180, t => noise[Math.round(t * 200)], "var(--c-rand)");
+  el("text", {x:460, y:16}, s, "pushed: chords removed");
+  wave(460, 60, 180, t => 8 * Math.sin(t * 97), "var(--c-neur)");
+  el("text", {x:230, y:120, class:"small"}, s, "overall change: big");
+  el("text", {x:230, y:136, class:"small"}, s, "musical meaning: none");
+  el("text", {x:460, y:120, class:"small"}, s, "overall change: could be modest");
+  el("text", {x:460, y:136, class:"small"}, s, "musical meaning: clear");
+})();
+
+/* ---------- The two dot charts ---------- */
+function swarmRow(points, x, r) {
+  // place dots left to right, each at the smallest vertical offset that does not overlap an already-placed dot
+  const placed = [];
+  const order = points.map((p, i) => i).sort((a, b) => points[a].v - points[b].v);
+  const out = new Array(points.length);
+  const d2 = (2 * r + 0.8) ** 2;
+  for (const i of order) {
+    const px = x(points[i].v);
+    const near = placed.filter(q => Math.abs(q.x - px) < 2 * r + 0.8);
+    let off = 0, k = 0;
+    while (true) {
+      const cand = k === 0 ? 0 : (k % 2 ? 1 : -1) * Math.ceil(k / 2) * (r * 0.9);
+      if (near.every(q => (q.x - px) ** 2 + (q.y - cand) ** 2 >= d2)) { off = cand; break; }
+      k++;
+    }
+    const pt = {x:px, y:off};
+    placed.push(pt); out[i] = pt;
+  }
+  return out;
+}
+
+function drawChart(id, key, opts) {
+  const host = document.getElementById(id);
+  const c = D[key];
+  const W = Math.max(280, host.clientWidth), r = W < 500 ? 2.1 : 3.2;
+  const m = {l:8, r:8};
+  const x = v => m.l + (v - opts.dom[0]) / (opts.dom[1] - opts.dom[0]) * (W - m.l - m.r);
+  const R = c.randoms.map(a => ({unit:a[0], v:a[1], z:a[2]}));
+  const N = c.neurons.map(a => ({unit:a[0], v:a[1], z:a[2], agree:a[3]}));
+  const pr = swarmRow(R, x, r), pn = swarmRow(N, x, r);
+  const ext = arr => Math.max(...arr.map(p => Math.abs(p.y))) + r + 4;
+  const hr = ext(pr), hn = ext(pn);
+  const top = 46, gap = 30;
+  const yR = top + 18 + hr, yN = yR + hr + gap + 18 + hn;
+  const plotBottom = yN + hn + 6;
+  const H = plotBottom + 62;
+  host.innerHTML = "";
+  const s = el("svg", {viewBox:`0 0 ${W} ${H}`, width:W, height:H, role:"img", "aria-label":opts.aria}, host);
+  // shaded random territory
+  el("rect", {x:x(c.lo), y:top, width:x(c.hi) - x(c.lo), height:plotBottom - top, fill:"var(--band)"}, s);
+  // threshold lines
+  const real = opts.realSide === "hi" ? c.hi : c.lo, mirror = opts.realSide === "hi" ? c.lo : c.hi;
+  el("line", {x1:x(real), y1:top - 34, x2:x(real), y2:plotBottom, stroke:"var(--ink)", "stroke-width":1.5}, s);
+  el("line", {x1:x(mirror), y1:top, x2:x(mirror), y2:plotBottom + 14, stroke:"var(--ink)", "stroke-width":1, "stroke-dasharray":"4 3"}, s);
+  function label(xv, y, lines, cls) {
+    const right = W - xv > xv;
+    lines.forEach((t, i) => el("text", {x: xv + (right ? 6 : -6), y: y + i * 14, "text-anchor": right ? "start" : "end", class:(cls || "") + " halo"}, s, t));
+  }
+  label(x(real), top - 24, opts.realLabel);
+  label(x(mirror), plotBottom + 12, ["same distance on the other side"], "small");
+  // row labels
+  el("text", {x:W - m.r, y:top + 12, "text-anchor":"end", class:"small halo"}, s, "256 random pushes");
+  el("text", {x:W - m.r, y:yR + hr + gap + 12, "text-anchor":"end", class:"small halo"}, s, "256 neurons");
+  // dots
+  function dot(p, pos, cy, cls, title) {
+    const g = el("g", {}, s);
+    el("circle", {cx:pos.x, cy:cy + pos.y, r:r + 3, fill:"transparent"}, g);
+    el("circle", {cx:pos.x, cy:cy + pos.y, r, class:cls}, g);
+    el("title", {}, g, title);
+  }
+  R.forEach((p, i) => dot(p, pr[i], yR, "rand", `random push ${p.unit}: ${p.v.toFixed(3)}`));
+  let up = 0, down = 0;
+  N.forEach((p, i) => {
+    const out = p.v > c.hi || p.v < c.lo;
+    if (p.v > c.hi) up++; if (p.v < c.lo) down++;
+    dot(p, pn[i], yN, out ? "neur" : "quiet", `neuron ${p.unit}: ${p.v.toFixed(3)} (${p.agree} of 4 songs agree)` + (out ? " - outside every random push" : ""));
+  });
+  // neuron 5455
+  const i5 = N.findIndex(p => p.unit === 5455);
+  if (i5 >= 0) {
+    const p = pn[i5], cy = yN + p.y;
+    el("circle", {cx:p.x, cy, r:r + 3, fill:"none", stroke:"var(--ink)", "stroke-width":2}, s);
+    const ly = yN - hn - 2;
+    el("line", {x1:p.x, y1:cy - r - 3, x2:p.x, y2:ly + 4, stroke:"var(--ink)", "stroke-width":1}, s);
+    el("text", {x:p.x + 4, y:ly, class:"mono halo", "font-weight":600}, s, "5455");
+  }
+  // axis
+  const ay = plotBottom + 22;
+  el("line", {x1:m.l, y1:ay, x2:W - m.r, y2:ay, class:"rule"}, s);
+  opts.ticks.forEach(t => {
+    el("line", {x1:x(t), y1:ay, x2:x(t), y2:ay + 4, class:"mutedline"}, s);
+    el("text", {x:x(t), y:ay + 17, "text-anchor":"middle", class:"small mono"}, s, String(t));
+  });
+  el("text", {x:m.l, y:ay + 36, class:"small"}, s, W < 520 ? opts.axisShort : opts.axis);
+  return {up, down};
+}
+
+const CH = {
+  moved: {id:"chart-moved", key:"moved +0.3", realSide:"hi", realLabel:["the most any random push", "changed the music"], dom:[0.45, 3.1], ticks:[0.5, 1, 1.5, 2, 2.5, 3],
+    axis:"Overall change, averaged over 4 songs  (0 = sounds identical to the untouched song; bigger = more different)",
+    axisShort:"Overall change (0 = identical; bigger = more different)", aria:"Dot chart of overall change for random pushes and neurons"},
+  chroma: {id:"chart-chroma", key:"chroma_focus +0.3", realSide:"lo", realLabel:["the furthest any random push", "moved note focus"], dom:[-0.14, 0.44], ticks:[-0.1, 0, 0.1, 0.2, 0.3, 0.4],
+    axis:"Change in note focus, averaged over 4 songs  (0 = no change; right = more focused on a few notes)",
+    axisShort:"Change in note focus (right = more focused)", aria:"Dot chart of note-focus change for random pushes and neurons"},
+};
+function render() {
+  for (const name in CH) {
+    const o = CH[name], c = D[o.key];
+    const {up, down} = drawChart(o.id, o.key, o);
+    const total = up + down;
+    document.getElementById("n-" + name).textContent = total;
+    const what = name === "moved" ? ["changed the music more than any random push", "changed it less than any random push"]
+                                   : ["raised note focus further than any random push moved it", "lowered it further"];
+    let t = `of 256 neurons landed outside everything the random pushes did: ${up} ${what[0]}, and ${down} ${what[1]}.`;
+    if (total !== c.count) t += ` <span class="warn">Mismatch with the file's own count (${c.count}).</span>`;
+    document.getElementById("t-" + name).innerHTML = t;
+  }
+}
+render();
+let rt; new ResizeObserver(() => { clearTimeout(rt); rt = setTimeout(render, 80); }).observe(document.querySelector(".wrap"));
+
+// neuron 5455 sentences and top-5 table
+function ord(n) { const s = n % 100 >= 11 && n % 100 <= 13 ? "th" : ({1:"st", 2:"nd", 3:"rd"}[n % 10] || "th"); return n + s; }
+document.getElementById("n5455-moved").textContent = `${ord(D.rank5455.moved)} of 256 neurons by distance from the random average`;
+document.getElementById("n5455-chroma").textContent =
+  `just past the left edge of the random range (${ord(D.rank5455.chroma)} of 256): focus went down a little, but mostly on two songs (piano ballad ${D.n5455_chroma_changes[1].toFixed(2)}, lo-fi ${D.n5455_chroma_changes[0].toFixed(2)}) while rock and ambient barely moved`;
+document.getElementById("top5").innerHTML = D["moved +0.3"].top5.map(r =>
+  `<tr><td class="num">${r[0]}</td><td class="num">${r[1].toFixed(2)}</td><td class="num">${r[4].map(v => v.toFixed(2)).join(", ")}</td><td>${r[3]} of 4</td></tr>`).join("") +
+  `<tr><td colspan="4" class="muted" style="font-size:13px">For scale: the random pushes averaged ${D["moved +0.3"].rmean.toFixed(2)}, and the most any of them reached was ${D["moved +0.3"].hi.toFixed(2)}.</td></tr>`;
+</script>
+</body>
+</html>
