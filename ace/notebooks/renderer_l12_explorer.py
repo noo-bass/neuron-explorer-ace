@@ -34,7 +34,8 @@ def _(mo):
     For each sound measure, a neuron "stands out" when its average change across the four songs is further from
     the random average than **every one** of the 256 random pushes. Every dot in the chart is real data.
 
-    Pick a measure, then click a dot in the chart or a row in the table to hear that neuron's before and after.
+    Pick a measure, then click a dot in the chart or a row in a table to hear that neuron's before and after.
+    Further down: the blind labels, which ask whether each push makes the same change on every song.
     """)
     return
 
@@ -57,7 +58,14 @@ def _(Path, json, mo, pl):
     _path = RUN / "descriptions.jsonl"
     described = {(d["plan"], d["kind"], d["unit"], d["dose"]): d["description"]
                  for d in map(json.loads, _path.read_text().splitlines())} if _path.exists() else {}
-    return PLAIN, PLANS, RUN, described, scores
+    # A text model's blind verdict on each unit and direction, from the four descriptions (ace/label_pushes.py)
+    _path = RUN / "labels.jsonl"
+    labels = pl.DataFrame([
+        {"kind": d["kind"], "unit": d["unit"], "dose": d["dose"], "consistency": d["consistency"],
+         "songs sharing": d["songs_sharing"], "label": d["label"], "destructive": bool(d["destructive"]), "why": d["reason"]}
+        for d in map(json.loads, _path.read_text().splitlines())
+    ]) if _path.exists() else None
+    return PLAIN, PLANS, RUN, described, labels, scores
 
 
 @app.cell
@@ -104,9 +112,86 @@ def _(mo, pl, scores):
 
 
 @app.cell
-def _(PLANS, RUN, chart, described, dose, measure, mo, pl, scores, table):
+def _(mo):
+    mo.md("""
+    ## Blind labels: is it the same change on every song?
+
+    For each neuron or random push, and each direction, a text model read Qwen's four "what changed" descriptions
+    (one per song) without being told whether the push came from a neuron or a random direction. It judged whether
+    the change was the same across songs and named it.
+
+    **The surprise:** random pushes come out consistent as often as neurons, and almost always with the same label,
+    "the main melody disappears or is replaced". So that effect, which is also neuron 5455's, may be what *any* push
+    of this size does. Where neurons differ is in the *kind* of change: drones, alarms, rattles, fanfares.
+    """)
+    return
+
+
+@app.cell
+def _(alt, labels, mo, pl):
+    mo.stop(labels is None, mo.md("*No labels yet.*"))
+    _order = ["same", "mostly", "different", "none"]
+    _rates = (labels.group_by("kind", "consistency").agg(pl.len().alias("n"))
+              .with_columns((pl.col("n") / pl.col("n").sum().over("kind")).alias("share")))
+    _bars = alt.Chart(_rates).mark_bar().encode(
+        y=alt.Y("kind:N", title=None, sort=["neuron", "random"]),
+        x=alt.X("share:Q", title="share of pushes", axis=alt.Axis(format="%")),
+        color=alt.Color("consistency:N", sort=_order, scale=alt.Scale(domain=_order, range=["#1f6f62", "#6fb5a5", "#d8c48a", "#b9bfbc"]),
+                        title="same change across songs?"),
+        order=alt.Order("rank:Q"),
+        tooltip=["kind", "consistency", "n", alt.Tooltip("share:Q", format=".0%")],
+    ).transform_calculate(rank="indexof(['same','mostly','different','none'], datum.consistency)").properties(height=110, width="container")
+    _dest = labels.filter(pl.col("consistency").is_in(["same", "mostly"])).group_by("kind").agg(pl.col("destructive").sum().alias("d"), pl.len().alias("n"))
+    _d = {r["kind"]: f"{r['d']} of {r['n']}" for r in _dest.iter_rows(named=True)}
+    mo.vstack([_bars, mo.md(f"Of the consistent changes, judged destructive: neurons {_d.get('neuron', '0')}, random pushes {_d.get('random', '0')}.")])
+    return
+
+
+@app.cell
+def _(mo):
+    label_filter = mo.ui.radio(["neurons, consistent and not the usual melody loss", "all neurons", "random pushes", "destructive"],
+                               value="neurons, consistent and not the usual melody loss", label="Show", inline=True)
+    label_filter
+    return (label_filter,)
+
+
+@app.cell
+def _(label_filter, labels, mo, pl):
+    mo.stop(labels is None)
+    _consistent = pl.col("consistency").is_in(["same", "mostly"])
+    _usual = pl.col("label").str.contains(r"(?i)melod|instrument (is )?replaced|instrument disappears")
+    _views = {
+        "neurons, consistent and not the usual melody loss": labels.filter((pl.col("kind") == "neuron") & _consistent & ~_usual),
+        "all neurons": labels.filter(pl.col("kind") == "neuron"),
+        "random pushes": labels.filter(pl.col("kind") == "random"),
+        "destructive": labels.filter(pl.col("destructive")),
+    }
+    _shown = _views[label_filter.value].sort(["consistency", "songs sharing"], descending=[False, True])
+    label_table = mo.ui.table(_shown, selection="single", page_size=12,
+                              label=f"{_shown.height} pushes. Click a row to listen. 'Usual melody loss' = labels mentioning melody or a replaced/disappearing instrument, the random pushes' typical effect.")
+    label_table
+    return (label_table,)
+
+
+@app.cell
+def _(
+    PLANS,
+    RUN,
+    chart,
+    described,
+    dose,
+    label_table,
+    labels,
+    measure,
+    mo,
+    pl,
+    scores,
+    table,
+):
     picked_chart = chart.value
-    if len(picked_chart) and "unit" in picked_chart.columns:
+    if label_table.value.height:
+        kind, unit = label_table.value["kind"][0], int(label_table.value["unit"][0])
+    elif len(picked_chart) and "unit" in picked_chart.columns:
         kind, unit = picked_chart["kind"][0], int(picked_chart["unit"][0])
     elif table.value.height:
         kind, unit = "neuron", int(table.value["neuron"][0])
@@ -127,7 +212,12 @@ def _(PLANS, RUN, chart, described, dose, measure, mo, pl, scores, table):
              for p in PLANS]
     title = f"Neuron {unit}" if kind == "neuron" else f"Random push {unit}"
     summary = f"{measure.value}, {'+' if dose.value > 0 else ''}{dose.value}: {row['z'][0]:+.1f} random-spreads from the random average, {row['songs agreeing'][0]} of 4 songs agree" if row.height else ""
-    mo.vstack([mo.md(f"## {title}\n{summary}"), *songs])
+    verdicts = []
+    if labels is not None:
+        for _r in labels.filter((pl.col("kind") == kind) & (pl.col("unit") == unit)).sort("dose", descending=True).iter_rows(named=True):
+            verdicts.append(f"- **push {_r['dose']:+g}:** {_r['consistency']} ({_r['songs sharing']}/4 songs)"
+                            + (f", \"{_r['label']}\"" if _r["label"] else "") + (" *(destructive)*" if _r["destructive"] else ""))
+    mo.vstack([mo.md(f"## {title}\n{summary}\n\n" + "\n".join(verdicts)), *songs])
     return
 
 
