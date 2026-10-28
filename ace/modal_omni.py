@@ -67,7 +67,7 @@ def progress(done, total, t0):
 
 
 @app.function(volumes=VOLS, gpu="H100", timeout=6 * 3600)
-def caption_clips(root: str, limit: int = 0, batch: int = 64):
+def caption_clips(root: str, limit: int = 0, batch: int = 128):
     from vllm import LLM, SamplingParams
 
     base = f"/runs/{root}"
