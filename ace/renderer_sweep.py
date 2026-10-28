@@ -178,53 +178,58 @@ def make_plans():
 
 
 @app.function(volumes=VOLS, gpu=GPU, timeout=3 * 3600)
-def sweep_part(plan_name: str, units: list, doses: tuple = DOSES, out: str = OUT):
-    """Render one plan with every unit pushed at every dose, 8 rows per batch. Clips go to clips/<plan>/ as Ogg,
-    one index line per clip with how far it moved from the untouched render."""
+def sweep_part(plan_names: list, units: list, doses: tuple = DOSES, out: str = OUT, layer: int = LAYER):
+    """Render each plan with every unit pushed at every dose, 8 rows per batch, at one decoder layer. Clips go to
+    clips/<plan>/ as Ogg, one index line per clip with how far it moved from the untouched render. The push is
+    scaled by this layer's own median residual norm, measured on the untouched render."""
     import numpy as np
     import soundfile as sf
 
-    # always the songs planned in OUT, so runs at other push sizes use exactly the same plans
+    # always the songs planned in OUT, so runs at other push sizes and layers use exactly the same plans
     plans = json.load(open(f"{OUT}/plans.json"))
-    plan = plans[plan_name]
-    clip_dir = f"{out}/clips/{plan_name}"
-    os.makedirs(clip_dir, exist_ok=True)
+    os.makedirs(out, exist_ok=True)
     if not os.path.exists(f"{out}/plans.json"):
         json.dump(plans, open(f"{out}/plans.json", "w"), indent=1)
-    os.makedirs(clip_dir, exist_ok=True)
-    R = Renderer()
+    R = Renderer(layer)
     torch = R.torch
     hidden = R.W.shape[0]
-    clips, sr = R.render(plan, torch.zeros(8, hidden, device=R.W.device))
-    base = clips[0]
-    sf.write(f"{clip_dir}/untouched.ogg", np.clip(base, -1, 1), sr, format="OGG", subtype="VORBIS")
-    rms = float(np.sqrt(np.mean(base ** 2)))
+    total = 0
+    for plan_name in plan_names:
+        plan = plans[plan_name]
+        clip_dir = f"{out}/clips/{plan_name}"
+        os.makedirs(clip_dir, exist_ok=True)
+        clips, sr = R.render(plan, torch.zeros(8, hidden, device=R.W.device))
+        scale = float(np.median(R.norms))
+        base = clips[0]
+        sf.write(f"{clip_dir}/untouched.ogg", np.clip(base, -1, 1), sr, format="OGG", subtype="VORBIS")
+        rms = float(np.sqrt(np.mean(base ** 2)))
 
-    jobs = [(kind, i, dose) for kind, i in units for dose in doses]
-    index = open(f"{out}/index_{plan_name}_{units[0][0]}{units[0][1]}.jsonl", "w")
-    t0 = time.time()
-    for b in range(0, len(jobs), 8):
-        chunk = jobs[b:b + 8]
-        rows = torch.zeros(8, hidden, device=R.W.device)
-        for k, (kind, i, dose) in enumerate(chunk):
-            rows[k] = dose * plan["resid_median"] * R.direction(kind, i)
-        out, _ = R.render(plan, rows)
-        for (kind, i, dose), x in zip(chunk, out):
-            name = f"{kind}{i}_{dose:+g}.ogg"
-            sf.write(f"{clip_dir}/{name}", np.clip(x, -1, 1), sr, format="OGG", subtype="VORBIS")
-            moved = float(np.sqrt(np.mean((x - base) ** 2)) / rms)
-            index.write(json.dumps({"plan": plan_name, "kind": kind, "unit": i, "dose": dose, "moved": moved,
-                                    "file": f"clips/{plan_name}/{name}"}) + "\n")
-        done = b + len(chunk)
-        if (b // 8) % 16 == 0 or done == len(jobs):
-            el = time.time() - t0
-            index.flush()
-            log(f"[{plan_name}] {done}/{len(jobs)} clips ({100 * done / len(jobs):.0f}%), {el / 60:.1f} min, "
-                f"ETA {el / done * (len(jobs) - done) / 60:.1f} min")
-            runs.commit()
-    index.close()
-    runs.commit()
-    return len(jobs)
+        jobs = [(kind, i, dose) for kind, i in units for dose in doses]
+        index = open(f"{out}/index_{plan_name}_{units[0][0]}{units[0][1]}.jsonl", "w")
+        t0 = time.time()
+        for b in range(0, len(jobs), 8):
+            chunk = jobs[b:b + 8]
+            rows = torch.zeros(8, hidden, device=R.W.device)
+            for k, (kind, i, dose) in enumerate(chunk):
+                rows[k] = dose * scale * R.direction(kind, i)
+            rendered, _ = R.render(plan, rows)
+            for (kind, i, dose), x in zip(chunk, rendered):
+                name = f"{kind}{i}_{dose:+g}.ogg"
+                sf.write(f"{clip_dir}/{name}", np.clip(x, -1, 1), sr, format="OGG", subtype="VORBIS")
+                moved = float(np.sqrt(np.mean((x - base) ** 2)) / rms)
+                index.write(json.dumps({"layer": layer, "plan": plan_name, "kind": kind, "unit": i, "dose": dose,
+                                        "moved": moved, "scale": scale, "file": f"clips/{plan_name}/{name}"}) + "\n")
+            done = b + len(chunk)
+            if (b // 8) % 16 == 0 or done == len(jobs):
+                el = time.time() - t0
+                index.flush()
+                log(f"[L{layer} {plan_name}] {done}/{len(jobs)} clips ({100 * done / len(jobs):.0f}%), {el / 60:.1f} min, "
+                    f"ETA {el / done * (len(jobs) - done) / 60:.1f} min")
+                runs.commit()
+        index.close()
+        runs.commit()
+        total += len(jobs)
+    return total
 
 
 @app.local_entrypoint()
@@ -232,7 +237,7 @@ def pilot():
     """256 neurons + 256 random directions x 4 plans x 2 doses, one GPU per plan."""
     make_plans.remote()
     units = pilot_units()
-    total = sum(sweep_part.starmap([(name, units) for name in PLANS]))
+    total = sum(sweep_part.starmap([([name], units) for name in PLANS]))
     print(f"pilot done: {total} clips", flush=True)
 
 
@@ -241,5 +246,21 @@ def pilot_gentle():
     """The same pilot at half the push (+-0.15), on the same saved songs, into its own folder."""
     units = pilot_units()
     out = f"{OUT}_d015"
-    total = sum(sweep_part.starmap([(name, units, (0.15, -0.15), out) for name in PLANS]))
+    total = sum(sweep_part.starmap([([name], units, (0.15, -0.15), out) for name in PLANS]))
     print(f"gentle pilot done: {total} clips", flush=True)
+
+
+@app.local_entrypoint()
+def survey(per_layer: int = 32):
+    """Lyra-style survey: every decoder layer, a few neurons + as many random directions, push +-0.15, the same four
+    saved songs. One GPU per layer; output in renderer_survey_d015/L<layer>/."""
+    import random
+
+    n_layers = 24
+    jobs = []
+    for layer in range(n_layers):
+        neurons = sorted(random.Random(layer).sample(range(6144), per_layer))
+        units = [("neuron", i) for i in neurons] + [("random", i) for i in range(per_layer)]
+        jobs.append((list(PLANS), units, (0.15, -0.15), f"/runs/renderer_survey_d015/L{layer}", layer))
+    total = sum(sweep_part.starmap(jobs))
+    print(f"survey done: {total} clips", flush=True)
