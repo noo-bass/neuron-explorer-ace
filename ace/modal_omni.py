@@ -1,6 +1,6 @@
 """Describe what each push changed, entirely on Modal with open models, instead of the paid Alibaba API (#6).
 
-    modal run ace/modal_omni.py::caption --root renderer_survey_d015 [--limit 50]    # 1. caption every clip
+    modal run ace/modal_omni.py::caption --root renderer_survey_d015 [--limit 50] [--layers 0,3,6]    # 1. caption every clip
     modal run ace/modal_omni.py::judge --root renderer_survey_d015                   # 2. compare and label
 
 1. Qwen3-Omni-30B-A3B-Captioner writes a detailed description of every clip on its own (temperature 0, so the same
@@ -67,12 +67,15 @@ def progress(done, total, t0):
 
 
 @app.function(volumes=VOLS, gpu="H100", timeout=6 * 3600)
-def caption_clips(root: str, limit: int = 0, batch: int = 128):
+def caption_clips(root: str, limit: int = 0, batch: int = 128, layers: str = ""):
     from vllm import LLM, SamplingParams
 
     base = f"/runs/{root}"
     out_path = f"{base}/captions.jsonl"
     files = sorted(os.path.relpath(os.path.join(d, f), base) for d, _, fs in os.walk(base) for f in fs if f.endswith(".ogg"))
+    if layers:  # e.g. "0,3,6": only the clips in those layer folders
+        wanted = {f"L{n}" for n in layers.split(",")}
+        files = [f for f in files if f.split("/")[0] in wanted]
     todo = [f for f in files if f not in done_keys(out_path, "file")]
     if limit:
         todo = todo[:limit]
@@ -147,8 +150,8 @@ def judge_units(root: str, batch: int = 128):
 
 
 @app.local_entrypoint()
-def caption(root: str = "renderer_survey_d015", limit: int = 0):
-    print(f"captioned {caption_clips.remote(root, limit)} clips", flush=True)
+def caption(root: str = "renderer_survey_d015", limit: int = 0, layers: str = ""):
+    print(f"captioned {caption_clips.remote(root, limit, layers=layers)} clips", flush=True)
 
 
 @app.local_entrypoint()
