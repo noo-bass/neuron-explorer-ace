@@ -15,6 +15,7 @@ import json
 import os
 import sys
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 from openai import OpenAI
 
@@ -52,14 +53,15 @@ def main():
             groups[(d["kind"], d["unit"], d["dose"])].append((d["plan"], d["description"]))
     client = OpenAI(api_key=api_key(), base_url=BASE_URL)
     out = open(os.path.join(run, "labels.jsonl"), "a")
-    for n, ((kind, unit, dose), descs) in enumerate(sorted(groups.items()), 1):
-        verdict, usage = judge(client, sorted(descs))
-        row = {"kind": kind, "unit": unit, "dose": dose, **verdict, "judge": JUDGE, "usage": usage}
-        out.write(json.dumps(row) + "\n")
-        out.flush()
-        print(f"[{n}/{len(groups)}] {kind} {unit} {dose:+g}: {verdict['consistency']}, {verdict['songs_sharing']}/4, "
-              f"\"{verdict['label']}\"{' (destructive)' if verdict.get('destructive') else ''} -- {verdict['reason']}", flush=True)
-
+    items = sorted(groups.items())
+    with ThreadPoolExecutor(4) as pool:
+        results = pool.map(lambda item: judge(client, sorted(item[1])), items)
+        for n, (((kind, unit, dose), _), (verdict, usage)) in enumerate(zip(items, results), 1):
+            row = {"kind": kind, "unit": unit, "dose": dose, **verdict, "judge": JUDGE, "usage": usage}
+            out.write(json.dumps(row) + "\n")
+            out.flush()
+            print(f"[{n}/{len(items)}] {kind} {unit} {dose:+g}: {verdict['consistency']}, {verdict['songs_sharing']}/4, "
+                  f"\"{verdict['label']}\"{' (destructive)' if verdict.get('destructive') else ''} -- {verdict['reason']}", flush=True)
 
 if __name__ == "__main__":
     main()

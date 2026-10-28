@@ -31,7 +31,8 @@ def pushes(run):
     standouts = sorted({u["unit"] for r in ranking.values() for u in r["units"]
                         if u["kind"] == "neuron" and abs(u["z"]) > r["max_random_z"]})
     units = [("neuron", i) for i in standouts] + [("random", i) for i in range(N_RANDOM)]
-    return [(p, kind, i, d) for kind, i in units for p in r0["plans"] for d in (0.3, -0.3)]
+    doses = sorted({r["dose"] for r in ranking.values()}, reverse=True)
+    return [(p, kind, i, d) for kind, i in units for p in r0["plans"] for d in doses]
 
 
 def describe(client, run, job, tries=6):
