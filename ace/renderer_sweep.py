@@ -178,14 +178,19 @@ def make_plans():
 
 
 @app.function(volumes=VOLS, gpu=GPU, timeout=3 * 3600)
-def sweep_part(plan_name: str, units: list):
+def sweep_part(plan_name: str, units: list, doses: tuple = DOSES, out: str = OUT):
     """Render one plan with every unit pushed at every dose, 8 rows per batch. Clips go to clips/<plan>/ as Ogg,
     one index line per clip with how far it moved from the untouched render."""
     import numpy as np
     import soundfile as sf
 
-    plan = json.load(open(f"{OUT}/plans.json"))[plan_name]
-    clip_dir = f"{OUT}/clips/{plan_name}"
+    # always the songs planned in OUT, so runs at other push sizes use exactly the same plans
+    plans = json.load(open(f"{OUT}/plans.json"))
+    plan = plans[plan_name]
+    clip_dir = f"{out}/clips/{plan_name}"
+    os.makedirs(clip_dir, exist_ok=True)
+    if not os.path.exists(f"{out}/plans.json"):
+        json.dump(plans, open(f"{out}/plans.json", "w"), indent=1)
     os.makedirs(clip_dir, exist_ok=True)
     R = Renderer()
     torch = R.torch
@@ -195,8 +200,8 @@ def sweep_part(plan_name: str, units: list):
     sf.write(f"{clip_dir}/untouched.ogg", np.clip(base, -1, 1), sr, format="OGG", subtype="VORBIS")
     rms = float(np.sqrt(np.mean(base ** 2)))
 
-    jobs = [(kind, i, dose) for kind, i in units for dose in DOSES]
-    index = open(f"{OUT}/index_{plan_name}_{units[0][0]}{units[0][1]}.jsonl", "w")
+    jobs = [(kind, i, dose) for kind, i in units for dose in doses]
+    index = open(f"{out}/index_{plan_name}_{units[0][0]}{units[0][1]}.jsonl", "w")
     t0 = time.time()
     for b in range(0, len(jobs), 8):
         chunk = jobs[b:b + 8]
@@ -229,3 +234,12 @@ def pilot():
     units = pilot_units()
     total = sum(sweep_part.starmap([(name, units) for name in PLANS]))
     print(f"pilot done: {total} clips", flush=True)
+
+
+@app.local_entrypoint()
+def pilot_gentle():
+    """The same pilot at half the push (+-0.15), on the same saved songs, into its own folder."""
+    units = pilot_units()
+    out = f"{OUT}_d015"
+    total = sum(sweep_part.starmap([(name, units, (0.15, -0.15), out) for name in PLANS]))
+    print(f"gentle pilot done: {total} clips", flush=True)
