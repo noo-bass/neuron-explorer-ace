@@ -41,13 +41,22 @@ def _(mo):
 
 
 @app.cell
-def _(Path, json, mo, pl):
-    RUN = Path(mo.notebook_dir()).parents[1] / "runs" / "renderer_sweep_L12"
+def _(mo):
+    run_picker = mo.ui.radio({"push size 0.3": "renderer_sweep_L12", "push size 0.15 (gentler)": "renderer_sweep_L12_d015"},
+                             value="push size 0.15 (gentler)", label="Which pilot", inline=True)
+    run_picker
+    return (run_picker,)
+
+
+@app.cell
+def _(Path, json, mo, pl, run_picker):
+    RUN = Path(mo.notebook_dir()).parents[1] / "runs" / run_picker.value
     ranking = json.loads((RUN / "ranking.json").read_text())
     PLAIN = {"moved": "overall change", "loudness_db": "loudness (dB)", "brightness": "brightness (octaves)",
              "onsets_per_s": "attacks per second", "harmonic_share": "sustained share", "bass_db": "bass (dB)",
              "mid_db": "middle (dB)", "treble_db": "treble (dB)", "chroma_focus": "note focus"}
-    PLANS = ranking["moved +0.3"]["plans"]
+    PLANS = next(iter(ranking.values()))["plans"]
+    DOSES = sorted({r["dose"] for r in ranking.values()}, reverse=True)
     scores = pl.DataFrame([
         {"measure": PLAIN[r["measure"]], "dose": r["dose"], "kind": u["kind"], "unit": u["unit"], "z": u["z"],
          "average change": u["mean"], "songs agreeing": u["agree"], "edge": r["max_random_z"],
@@ -65,13 +74,13 @@ def _(Path, json, mo, pl):
          "songs sharing": d["songs_sharing"], "label": d["label"], "destructive": bool(d["destructive"]), "why": d["reason"]}
         for d in map(json.loads, _path.read_text().splitlines())
     ]) if _path.exists() else None
-    return PLAIN, PLANS, RUN, described, labels, scores
+    return DOSES, PLAIN, PLANS, RUN, described, labels, scores
 
 
 @app.cell
-def _(PLAIN, mo):
+def _(DOSES, PLAIN, mo):
     measure = mo.ui.dropdown(list(PLAIN.values()), value="note focus", label="Measure")
-    dose = mo.ui.radio({"push +0.3": 0.3, "push -0.3": -0.3}, value="push +0.3", label="Direction", inline=True)
+    dose = mo.ui.radio({f"push {d:+g}": d for d in DOSES}, value=f"push {DOSES[0]:+g}", label="Direction", inline=True)
     mo.hstack([measure, dose], justify="start", gap=2)
     return dose, measure
 
@@ -120,9 +129,10 @@ def _(mo):
     (one per song) without being told whether the push came from a neuron or a random direction. It judged whether
     the change was the same across songs and named it.
 
-    **The surprise:** random pushes come out consistent as often as neurons, and almost always with the same label,
-    "the main melody disappears or is replaced". So that effect, which is also neuron 5455's, may be what *any* push
-    of this size does. Where neurons differ is in the *kind* of change: drones, alarms, rattles, fanfares.
+    **At push 0.3** random pushes come out consistent as often as neurons, nearly always as "the main melody disappears
+    or is replaced": any push that size knocks the melody out. **At push 0.15** random pushes mostly change nothing,
+    while some neurons still make one consistent, specific change (reverb, vinyl crackle, an added pad or strings).
+    That gap is the evidence that those neurons do something of their own.
     """)
     return
 
@@ -175,6 +185,7 @@ def _(label_filter, labels, mo, pl):
 
 @app.cell
 def _(
+    DOSES,
     PLANS,
     RUN,
     chart,
@@ -208,7 +219,7 @@ def _(
         return mo.vstack([mo.md(f"push {d:+g}"), clip(f"{p}/{kind}{unit}_{d:+g}.ogg"), heard])
 
     songs = [mo.hstack([mo.md(f"**{p.replace('_', ' ')}**"), mo.vstack([mo.md("untouched"), clip(f"{p}/untouched.ogg")]),
-                        pushed(p, 0.3), pushed(p, -0.3)], widths=[1, 2, 2, 2], align="start")
+                        *[pushed(p, d) for d in DOSES]], widths=[1, 2, 2, 2], align="start")
              for p in PLANS]
     title = f"Neuron {unit}" if kind == "neuron" else f"Random push {unit}"
     summary = f"{measure.value}, {'+' if dose.value > 0 else ''}{dose.value}: {row['z'][0]:+.1f} random-spreads from the random average, {row['songs agreeing'][0]} of 4 songs agree" if row.height else ""
