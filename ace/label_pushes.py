@@ -31,7 +31,7 @@ different instruments, so "the lead melody disappears" can be the same change ev
 and synth in another). Reply with JSON only:
 {{"consistency": "same" | "mostly" | "different" | "none",   // "none" = little or no change in most songs
   "songs_sharing": <how many of the 4 songs show the shared change, 0-4>,
-  "label": "<the shared change in at most 8 plain words, or empty if there is none>",
+  "label": "<the shared change in at most 8 plain words, naming the actual sound the listener heard (e.g. 'low rumbling drone replaces the music', 'high melody line disappears') rather than a general category like 'musical replacement'; empty if there is none>",
   "destructive": <true if the shared change mostly wrecks the music (noise, garbling, unrecognisable), else false>,
   "reason": "<one sentence>"}}"""
 
