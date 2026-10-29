@@ -47,8 +47,8 @@ json.dump(ranking, open(os.path.join(run, "ranking.json"), "w"), indent=1)
 print(f"{'measure':22} {'neurons beyond every random':>28}  top neurons (z, plans agreeing of {len(plans)})   N5455")
 for key, r in ranking.items():
     top = [u for u in r["units"] if u["kind"] == "neuron"][:4]
-    n5455 = next(u for u in r["units"] if u["kind"] == "neuron" and u["unit"] == 5455)
-    rank5455 = [u["unit"] for u in r["units"] if u["kind"] == "neuron"].index(5455) + 1
+    n5455 = next((u for u in r["units"] if u["kind"] == "neuron" and u["unit"] == 5455), None)  # only in the L12 sweeps
+    rank5455 = [u["unit"] for u in r["units"] if u["kind"] == "neuron"].index(5455) + 1 if n5455 else 0
     print(f"{key:22} {r['neurons_beyond_every_random']:>12} of {r['n_neurons']:<13}  "
           + "  ".join(f"N{u['unit']} {u['z']:+.1f} {u['agree']}/{len(plans)}" for u in top)
-          + f"   #{rank5455} z {n5455['z']:+.1f}")
+          + (f"   #{rank5455} z {n5455['z']:+.1f}" if n5455 else ""))
